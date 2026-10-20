@@ -1,0 +1,227 @@
+/* PC System Resource Monitor - Light Mode Styling */
+:root {
+    --bg-main: #f1f5f9;
+    --bg-card: #ffffff;
+    --bg-card-hover: #ffffff;
+    --border-color: #e2e8f0;
+    --text-primary: #0f172a;
+    --text-muted: #64748b;
+    
+    --color-cpu: #0284c7;
+    --color-ram: #7c3aed;
+    --color-disk: #d97706;
+    --color-net: #059669;
+}
+
+body {
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    margin: 0;
+    padding-bottom: 2rem;
+}
+
+/* Navbar & Header */
+.app-header {
+    background-color: #ffffff;
+    border-bottom: 1px solid var(--border-color);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    padding: 0.85rem 1.5rem;
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    padding: 0.35rem 0.85rem;
+    border-radius: 9999px;
+    font-weight: 600;
+}
+
+.badge-connected {
+    background-color: rgba(5, 150, 105, 0.1);
+    color: #059669;
+    border: 1px solid rgba(5, 150, 105, 0.25);
+}
+
+.badge-reconnecting {
+    background-color: rgba(217, 119, 6, 0.1);
+    color: #d97706;
+    border: 1px solid rgba(217, 119, 6, 0.25);
+}
+
+.badge-disconnected {
+    background-color: rgba(220, 38, 38, 0.1);
+    color: #dc2626;
+    border: 1px solid rgba(220, 38, 38, 0.25);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.status-dot-green {
+    background-color: #059669;
+    box-shadow: 0 0 6px rgba(5, 150, 105, 0.4);
+}
+
+.status-dot-yellow {
+    background-color: #d97706;
+    box-shadow: 0 0 6px rgba(217, 119, 6, 0.4);
+}
+
+.status-dot-red {
+    background-color: #dc2626;
+    box-shadow: 0 0 6px rgba(220, 38, 38, 0.4);
+}
+
+/* Kartu Metrik */
+.metric-card {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    padding: 1.15rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    height: 100%;
+}
+
+.metric-card:hover {
+    border-color: #93c5fd;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+}
+
+.metric-title {
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+}
+
+.metric-value-huge {
+    font-size: 2.25rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.metric-subtext {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+
+/* Progress bar kustom */
+.metric-progress {
+    height: 6px;
+    background-color: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 9999px;
+    margin-top: 0.75rem;
+    overflow: hidden;
+}
+
+.metric-progress-bar {
+    height: 100%;
+    transition: width 0.4s ease;
+}
+
+/* Canvas Chart */
+.chart-container-live {
+    position: relative;
+    height: 240px;
+    width: 100%;
+}
+
+.chart-container-history {
+    position: relative;
+    height: 340px;
+    width: 100%;
+}
+
+/* Nav tabs kustom untuk histori */
+.nav-pills-custom .nav-link {
+    background-color: #f8fafc;
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+    margin-right: 0.5rem;
+    margin-bottom: 0.5rem;
+    border-radius: 0.5rem;
+    padding: 0.4rem 0.9rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+
+.nav-pills-custom .nav-link:hover {
+    background-color: #e2e8f0;
+    color: var(--text-primary);
+}
+
+.nav-pills-custom .nav-link.active {
+    background-color: #2563eb;
+    color: #ffffff;
+    border-color: #2563eb;
+}
+
+.btn-filter-preset {
+    font-size: 0.8rem;
+    padding: 0.3rem 0.7rem;
+    border-radius: 0.4rem;
+    font-weight: 600;
+}
+
+/* Core pill chips */
+.core-chip {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    margin: 0.15rem;
+    border-radius: 0.35rem;
+    font-size: 0.75rem;
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    color: #334155;
+}
+
+/* Interactive Core Chip with Checkbox Toggle */
+.core-chip-clickable {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.22rem 0.6rem;
+    margin: 0.2rem;
+    border-radius: 0.4rem;
+    font-size: 0.78rem;
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    color: #334155;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.15s ease;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.core-chip-clickable:hover {
+    border-color: #94a3b8;
+    background-color: #f8fafc;
+}
+
+.core-chip-clickable input[type="checkbox"] {
+    cursor: pointer;
+    width: 14px;
+    height: 14px;
+}
+
+.core-chip-inactive {
+    opacity: 0.65 !important;
+    background-color: #f8fafc !important;
+    border-color: #e2e8f0 !important;
+}
+
+.core-chip-inactive span {
+    color: #64748b !important;
+}

@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>PC System Resource Monitor - CPU, RAM, Disk & Network</title>
+    <!-- Semua library lokal offline tanpa CDN -->
+    <link rel="stylesheet" href="lib/bootstrap/bootstrap.min.css">
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header Aplikasi (Light Mode Bersih & Kontras) -->
+        <header class="app-header mb-4">
+            <div class="container-fluid">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                    <div>
+                        <h4 class="mb-1 text-dark fw-bold">
+                            <span class="text-primary">&#9679;</span> PC System Resource Monitor
+                        </h4>
+                        <div class="text-muted small">
+                            Host: <span class="text-dark fw-semibold">{{ displayMachineName }}</span> &bull; 
+                            OS: <span class="text-dark fw-semibold">{{ displayOsDescription }}</span> &bull; 
+                            CPU: <span class="text-primary fw-bold">{{ displayCoreCount }} Logical Cores</span> &bull; 
+                            RAM: <span class="text-dark fw-semibold">{{ displayTotalRam }}</span>
+                        </div>
+                    </div>
+
+                    <div class="d-flex align-items-center gap-3">
+                        <div class="status-badge" :class="{
+                            'badge-connected': connectionStatus === 'connected',
+                            'badge-reconnecting': connectionStatus === 'reconnecting',
+                            'badge-disconnected': connectionStatus === 'disconnected'
+                        }">
+                            <span class="status-dot" :class="{
+                                'status-dot-green': connectionStatus === 'connected',
+                                'status-dot-yellow': connectionStatus === 'reconnecting',
+                                'status-dot-red': connectionStatus === 'disconnected'
+                            }"></span>
+                            <span>{{ connectionText }}</span>
+                        </div>
+                        <div class="text-muted small d-none d-md-block">
+                            Waktu: <span class="text-dark fw-semibold">{{ live.timestamp }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Konten Utama Dashboard -->
+        <main class="container-fluid px-3 px-md-4">
+            
+            <!-- BAGIAN 1: KARTU RINGKASAN METRIK REAL-TIME (URUTAN: CPU, RAM, DISK, NETWORK) -->
+            <div class="row g-3 mb-4">
+                <!-- Kartu 1: CPU -->
+                <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="metric-card">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="metric-title" style="color: #0284c7;">Total CPU</span>
+                            <span class="badge bg-light text-dark border">{{ live.coreCount }} Cores</span>
+                        </div>
+                        <div class="metric-value-huge" style="color: #0284c7;">
+                            {{ live.cpuTotalPercent }}<span class="fs-4">%</span>
+                        </div>
+                        <div class="metric-progress">
+                            <div class="metric-progress-bar bg-info" :style="{ width: live.cpuTotalPercent + '%' }"></div>
+                        </div>
+                        <div class="metric-subtext">
+                            Pemakaian processor gabungan seluruh core
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Kartu 2: RAM -->
+                <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="metric-card">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="metric-title" style="color: #7c3aed;">Memory (RAM)</span>
+                            <span class="badge bg-light text-dark border">{{ formatBytes(live.ramTotalBytes) }}</span>
+                        </div>
+                        <div class="metric-value-huge" style="color: #7c3aed;">
+                            {{ live.ramUsagePercent }}<span class="fs-4">%</span>
+                        </div>
+                        <div class="metric-progress">
+                            <div class="metric-progress-bar" style="background-color: #7c3aed;" :style="{ width: live.ramUsagePercent + '%' }"></div>
+                        </div>
+                        <div class="metric-subtext">
+                            Terpakai: {{ formatBytes(live.ramUsedBytes) }} / Sisa: {{ formatBytes(live.ramAvailableBytes) }}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Kartu 3: Disk (Disk tempat aplikasi berjalan) -->
+                <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="metric-card">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="metric-title" style="color: #d97706;">Disk Active Time</span>
+                            <span class="badge bg-light text-dark border fw-bold">{{ live.appDiskName }}</span>
+                        </div>
+                        <div class="metric-value-huge" style="color: #d97706;">
+                            {{ live.diskUsagePercent }}<span class="fs-4">%</span>
+                        </div>
+                        <div class="metric-progress">
+                            <div class="metric-progress-bar bg-warning" :style="{ width: live.diskUsagePercent + '%' }"></div>
+                        </div>
+                        <div class="metric-subtext">
+                            Disk tempat aplikasi berjalan: <strong class="text-dark">{{ live.appDiskName }}</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Kartu 4: Network -->
+                <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="metric-card">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="metric-title" style="color: #059669;">Network Usage</span>
+                            <select class="form-select form-select-sm py-0 px-2 text-dark" v-model="selectedNetworkName" style="width: auto; font-size: 0.75rem; max-width: 140px;">
+                                <option value="_Total">Total Network</option>
+                                <option v-for="net in live.networkAdapters" :key="net.name" :value="net.name">
+                                    {{ net.name }}
+                                </option>
+                            </select>
+                        </div>
+                        <div class="metric-value-huge" style="color: #059669;">
+                            {{ currentSelectedNetworkUsage }}<span class="fs-4">%</span>
+                        </div>
+                        <div class="metric-progress">
+                            <div class="metric-progress-bar bg-success" :style="{ width: currentSelectedNetworkUsage + '%' }"></div>
+                        </div>
+                        <div class="metric-subtext">
+                            Kecepatan data: <strong class="text-dark">{{ formatNetworkSpeed(currentSelectedNetworkSpeed) }}</strong>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BAGIAN 2: LIVE CHARTS (ATAS) -->
+            <div class="row g-3 mb-4">
+                <!-- Live Chart CPU: Menggunakan ApexCharts Line dengan Legend di Samping & Tombol Show/Hide -->
+                <div class="col-12 col-lg-8">
+                    <div class="metric-card">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center mb-2">
+                            <div>
+                                <h6 class="mb-0 text-dark fw-bold">Live CPU Usage (Per-Core + Total)</h6>
+                                <small class="text-muted">Centang / uncheck kotak core di bawah untuk show / hide series pada grafik</small>
+                            </div>
+                        </div>
+
+                        <!-- Checkbox Chips Interaktif untuk Show/Hide Series bawaan ApexCharts -->
+                        <div class="mb-2 d-flex flex-wrap align-items-center">
+                            <label 
+                                v-for="(val, idx) in live.cpuCores" 
+                                :key="idx" 
+                                class="core-chip-clickable" 
+                                :class="{ 'core-chip-inactive': !coreVisibility[idx] }"
+                                :style="{ borderLeft: '4px solid ' + generateCoreColor(idx, live.coreCount) }">
+                                <input 
+                                    type="checkbox" 
+                                    class="form-check-input me-1 my-0" 
+                                    :checked="coreVisibility[idx]"
+                                    @change="toggleCoreSeries(idx)">
+                                <span>C{{ idx }}: <strong class="text-dark">{{ val }}%</strong></span>
+                            </label>
+
+                            <label 
+                                class="core-chip-clickable" 
+                                :class="{ 'core-chip-inactive': !totalVisibility }"
+                                style="border-left: 4px solid #0f172a; background-color: #f1f5f9;">
+                                <input 
+                                    type="checkbox" 
+                                    class="form-check-input me-1 my-0" 
+                                    :checked="totalVisibility"
+                                    @change="toggleTotalSeries">
+                                <span>Total: <strong class="text-dark">{{ live.cpuTotalPercent }}%</strong></span>
+                            </label>
+                        </div>
+
+                        <!-- Kontainer ApexCharts Line untuk CPU -->
+                        <div id="cpuApexChart" style="min-height: 270px; width: 100%;"></div>
+                    </div>
+                </div>
+
+                <!-- Live Chart Disk (DITUKAR KE SINI: Baris Atas Samping CPU) -->
+                <div class="col-12 col-lg-4">
+                    <div class="metric-card">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div>
+                                <h6 class="mb-0 text-dark fw-bold">Live Disk Usage (% Time)</h6>
+                                <small class="text-muted">Disk aplikasi: <strong class="text-dark">{{ live.appDiskName }}</strong></small>
+                            </div>
+                            <div class="d-flex align-items-center gap-1">
+                                <span class="badge bg-light text-dark border">{{ live.appDiskName }}</span>
+                                <span class="badge bg-warning text-dark fw-bold">{{ live.diskUsagePercent }}%</span>
+                            </div>
+                        </div>
+                        <div class="chart-container-live">
+                            <canvas id="diskLiveCanvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Baris 2 Live Charts: RAM dan Network (RAM DITUKAR KE BAWAH) -->
+            <div class="row g-3 mb-4">
+                <!-- Live Chart RAM (DITUKAR KE SINI: Baris Bawah Kiri) -->
+                <div class="col-12 col-lg-6">
+                    <div class="metric-card">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div>
+                                <h6 class="mb-0 text-dark fw-bold">Live RAM Usage (%)</h6>
+                                <small class="text-muted">Persentase konsumsi memori fisik</small>
+                            </div>
+                            <span class="badge" style="background-color: #7c3aed; color: #fff;">{{ live.ramUsagePercent }}%</span>
+                        </div>
+                        <div class="chart-container-live">
+                            <canvas id="ramLiveCanvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Chart Network (Baris Bawah Kanan) -->
+                <div class="col-12 col-lg-6">
+                    <div class="metric-card">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                            <div>
+                                <h6 class="mb-0 text-dark fw-bold">Live Network Usage (%)</h6>
+                                <small class="text-muted">Adapter: <strong>{{ selectedNetworkDisplayName }}</strong></small>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <select class="form-select form-select-sm" v-model="selectedNetworkName" style="width: auto; max-width: 170px;">
+                                    <option value="_Total">Total Network</option>
+                                    <option v-for="net in live.networkAdapters" :key="net.name" :value="net.name">
+                                        {{ net.name }}
+                                    </option>
+                                </select>
+                                <span class="badge bg-success text-white fw-bold">{{ currentSelectedNetworkUsage }}%</span>
+                            </div>
+                        </div>
+                        <div class="chart-container-live">
+                            <canvas id="netLiveCanvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BAGIAN KHUSUS: TOP 20 PROGRAM CPU & RAM (REFRESH TIAP 10 DETIK & SAAT WEB DIMUAT) -->
+            <div class="row g-3 mb-4">
+                <!-- Kolom Kiri: Top 20 Program CPU High Usage -->
+                <div class="col-12 col-lg-6">
+                    <div class="metric-card">
+                        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2" style="border-color: var(--border-color) !important;">
+                            <div>
+                                <h6 class="mb-0 text-dark fw-bold">Top 20 Program CPU High Usage</h6>
+                                <small class="text-muted">Diperbarui setiap 10 detik</small>
+                            </div>
+                            <span class="badge" style="background-color: #0284c7; color: #fff;">CPU (%)</span>
+                        </div>
+                        <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
+                            <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.84rem;">
+                                <thead class="table-light sticky-top">
+                                    <tr>
+                                        <th style="width: 45px;" class="text-center">#</th>
+                                        <th>Nama Program</th>
+                                        <th style="width: 75px;" class="text-end">PID</th>
+                                        <th style="width: 95px;" class="text-end">CPU</th>
+                                        <th style="width: 100px;" class="text-end">RAM</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="(proc, idx) in topProcesses.topCpu" :key="'cpu-' + proc.id">
+                                        <td class="text-center text-muted fw-semibold">{{ idx + 1 }}</td>
+                                        <td class="fw-semibold text-dark text-truncate" style="max-width: 180px;" :title="proc.name">
+                                            {{ proc.name }}
+                                        </td>
+                                        <td class="text-end text-muted small">{{ proc.id }}</td>
+                                        <td class="text-end">
+                                            <span class="badge" :class="getCpuBadgeClass(proc.cpuPercent)">
+                                                {{ proc.cpuPercent }}%
+                                            </span>
+                                        </td>
+                                        <td class="text-end text-muted small">{{ formatMb(proc.memoryMb) }}</td>
+                                    </tr>
+                                    <tr v-if="topProcesses.topCpu.length === 0">
+                                        <td colspan="5" class="text-center text-muted py-3">Memuat data proses...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Kolom Kanan: Top 20 Program High RAM -->
+                <div class="col-12 col-lg-6">
+                    <div class="metric-card">
+                        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2" style="border-color: var(--border-color) !important;">
+                            <div>
+                                <h6 class="mb-0 text-dark fw-bold">Top 20 Program High RAM</h6>
+                                <small class="text-muted">Diperbarui setiap 10 detik</small>
+                            </div>
+                            <span class="badge" style="background-color: #7c3aed; color: #fff;">RAM (MB)</span>
+                        </div>
+                        <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
+                            <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.84rem;">
+                                <thead class="table-light sticky-top">
+                                    <tr>
+                                        <th style="width: 45px;" class="text-center">#</th>
+                                        <th>Nama Program</th>
+                                        <th style="width: 75px;" class="text-end">PID</th>
+                                        <th style="width: 100px;" class="text-end">RAM</th>
+                                        <th style="width: 95px;" class="text-end">CPU</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="(proc, idx) in topProcesses.topRam" :key="'ram-' + proc.id">
+                                        <td class="text-center text-muted fw-semibold">{{ idx + 1 }}</td>
+                                        <td class="fw-semibold text-dark text-truncate" style="max-width: 180px;" :title="proc.name">
+                                            {{ proc.name }}
+                                        </td>
+                                        <td class="text-end text-muted small">{{ proc.id }}</td>
+                                        <td class="text-end">
+                                            <span class="badge" style="background-color: #7c3aed; color: #fff;">
+                                                {{ formatMb(proc.memoryMb) }}
+                                            </span>
+                                        </td>
+                                        <td class="text-end text-muted small">{{ proc.cpuPercent }}%</td>
+                                    </tr>
+                                    <tr v-if="topProcesses.topRam.length === 0">
+                                        <td colspan="5" class="text-center text-muted py-3">Memuat data proses...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BAGIAN KHUSUS: IIS CPU & MEMORY USAGE -->
+            <div class="metric-card mb-4">
+                <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-2" style="border-color: var(--border-color) !important;">
+                    <div>
+                        <h5 class="mb-0 text-dark fw-bold">IIS CPU & Memory usage</h5>
+                        <small class="text-muted">Monitoring real-time worker process IIS (w3wp.exe) per website &bull; Disimpan tiap 20 detik (retensi 3 hari)</small>
+                    </div>
+                    <span class="badge" style="background-color: #0284c7; color: #fff;">{{ live.iisWebsites.length }} Website</span>
+                </div>
+                
+                <div class="row g-3">
+                    <!-- Card Kiri: Table isinya Website Name, CPU Usage, RAM Usage -->
+                    <div class="col-12 col-lg-5">
+                        <div class="card h-100" style="border: 1px solid var(--border-color); border-radius: 8px; box-shadow: none;">
+                            <div class="card-header bg-light py-2 px-3 border-bottom" style="border-color: var(--border-color) !important;">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span class="fw-bold text-dark small">Daftar Website IIS</span>
+                                    <span class="badge bg-secondary text-white" style="font-size: 0.72rem;">Live Data</span>
+                                </div>
+                            </div>
+                            <div class="table-responsive" style="max-height: 440px; overflow-y: auto;">
+                                <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.84rem;">
+                                    <thead class="table-light sticky-top">
+                                        <tr>
+                                            <th>Website Name</th>
+                                            <th style="width: 105px;" class="text-end">CPU Usage</th>
+                                            <th style="width: 110px;" class="text-end">RAM Usage</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="site in live.iisWebsites" :key="site.websiteName">
+                                            <td class="fw-semibold text-dark text-truncate" style="max-width: 180px;" :title="site.websiteName">
+                                                {{ site.websiteName }}
+                                            </td>
+                                            <td class="text-end">
+                                                <span class="badge" :class="getCpuBadgeClass(site.cpuPercent)">
+                                                    {{ site.cpuPercent }}%
+                                                </span>
+                                            </td>
+                                            <td class="text-end">
+                                                <span class="badge" style="background-color: #7c3aed; color: #fff;">
+                                                    {{ formatMb(site.memoryMb) }}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                        <tr v-if="!live.iisWebsites || live.iisWebsites.length === 0">
+                                            <td colspan="3" class="text-center text-muted py-4">
+                                                Tidak ada worker process IIS (w3wp.exe) yang terdeteksi aktif.
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Panel Kanan: 2 Card (Atas: Live CPU, Bawah: Live Memory) -->
+                    <div class="col-12 col-lg-7">
+                        <div class="d-flex flex-column gap-3 h-100">
+                            <!-- Panel Kanan Atas: Live Data CPU Usage per Website -->
+                            <div class="card flex-fill" style="border: 1px solid var(--border-color); border-radius: 8px; box-shadow: none;">
+                                <div class="card-header bg-light py-2 px-3 border-bottom d-flex justify-content-between align-items-center" style="border-color: var(--border-color) !important;">
+                                    <span class="fw-bold text-dark small">Live Data CPU Usage per Website (%)</span>
+                                    <small class="text-muted" style="font-size: 0.75rem;">Real-time per detik</small>
+                                </div>
+                                <div class="card-body p-2" style="height: 200px; position: relative;">
+                                    <canvas id="iisCpuLiveCanvas"></canvas>
+                                </div>
+                            </div>
+
+                            <!-- Panel Kanan Bawah: Live Data Memory Usage per Website -->
+                            <div class="card flex-fill" style="border: 1px solid var(--border-color); border-radius: 8px; box-shadow: none;">
+                                <div class="card-header bg-light py-2 px-3 border-bottom d-flex justify-content-between align-items-center" style="border-color: var(--border-color) !important;">
+                                    <span class="fw-bold text-dark small">Live Data Memory Usage per Website (MB)</span>
+                                    <small class="text-muted" style="font-size: 0.75rem;">Real-time per detik</small>
+                                </div>
+                                <div class="card-body p-2" style="height: 200px; position: relative;">
+                                    <canvas id="iisMemLiveCanvas"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BAGIAN 3: HISTORI (LINE CHART DI BAWAH) -->
+            <div class="row g-3 mb-4">
+                <div class="col-12">
+                    <div class="metric-card">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3 border-bottom pb-3" style="border-color: var(--border-color) !important;">
+                            <div>
+                                <h5 class="mb-1 text-dark fw-bold">
+                                    Histori Metrik Sistem
+                                </h5>
+                                <small class="text-muted">
+                                    Disimpan otomatis setiap 1 menit &bull; Retensi otomatis maksimal 7 hari ke belakang
+                                </small>
+                            </div>
+
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <!-- Pilihan Rentang Waktu -->
+                                <div class="btn-group" role="group">
+                                    <button 
+                                        type="button" 
+                                        class="btn btn-sm btn-filter-preset"
+                                        :class="{ 'btn-primary': selectedRange === '1h', 'btn-outline-secondary': selectedRange !== '1h' }"
+                                        @click="setRange('1h')">
+                                        1 Jam
+                                    </button>
+                                    <button 
+                                        type="button" 
+                                        class="btn btn-sm btn-filter-preset"
+                                        :class="{ 'btn-primary': selectedRange === '6h', 'btn-outline-secondary': selectedRange !== '6h' }"
+                                        @click="setRange('6h')">
+                                        6 Jam
+                                    </button>
+                                    <button 
+                                        type="button" 
+                                        class="btn btn-sm btn-filter-preset"
+                                        :class="{ 'btn-primary': selectedRange === '24h', 'btn-outline-secondary': selectedRange !== '24h' }"
+                                        @click="setRange('24h')">
+                                        24 Jam
+                                    </button>
+                                    <button 
+                                        type="button" 
+                                        class="btn btn-sm btn-filter-preset"
+                                        :class="{ 'btn-primary': selectedRange === '3d', 'btn-outline-secondary': selectedRange !== '3d' }"
+                                        @click="setRange('3d')">
+                                        3 Hari
+                                    </button>
+                                    <button 
+                                        type="button" 
+                                        class="btn btn-sm btn-filter-preset"
+                                        :class="{ 'btn-primary': selectedRange === '7d', 'btn-outline-secondary': selectedRange !== '7d' }"
+                                        @click="setRange('7d')">
+                                        7 Hari
+                                    </button>
+                                </div>
+
+                                <!-- Tombol Refresh -->
+                                <button 
+                                    class="btn btn-sm btn-outline-primary" 
+                                    :disabled="isLoadingHistory" 
+                                    @click="fetchHistory">
+                                    <span v-if="isLoadingHistory">Memuat...</span>
+                                    <span v-else>Muat Ulang</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Tab Pilihan Metrik yang Ditampilkan di Chart Histori -->
+                        <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+                            <ul class="nav nav-pills nav-pills-custom mb-0">
+                                <li class="nav-item">
+                                    <button 
+                                        class="nav-link" 
+                                        :class="{ active: selectedMetric === 'cpu' }" 
+                                        @click="setMetric('cpu')">
+                                        CPU (Total & Cores)
+                                    </button>
+                                </li>
+                                <li class="nav-item">
+                                    <button 
+                                        class="nav-link" 
+                                        :class="{ active: selectedMetric === 'ram' }" 
+                                        @click="setMetric('ram')">
+                                        RAM (%)
+                                    </button>
+                                </li>
+                                <li class="nav-item">
+                                    <button 
+                                        class="nav-link" 
+                                        :class="{ active: selectedMetric === 'disk' }" 
+                                        @click="setMetric('disk')">
+                                        Disk D (%)
+                                    </button>
+                                </li>
+                                <li class="nav-item">
+                                    <button 
+                                        class="nav-link" 
+                                        :class="{ active: selectedMetric === 'network' }" 
+                                        @click="setMetric('network')">
+                                        Total Network (%)
+                                    </button>
+                                </li>
+                                <li class="nav-item">
+                                    <button 
+                                        class="nav-link" 
+                                        :class="{ active: selectedMetric === 'all' }" 
+                                        @click="setMetric('all')">
+                                        Semua Metrik Gabungan
+                                    </button>
+                                </li>
+                            </ul>
+
+                            <div class="text-muted small">
+                                Total Data Tersimpan: <strong class="text-dark">{{ historyRecords.length }} record</strong>
+                            </div>
+                        </div>
+
+                        <!-- Checkbox Chips Pilihan Series untuk Histori CPU (Total & Cores) -->
+                        <div v-if="selectedMetric === 'cpu'" class="mb-3 d-flex flex-wrap align-items-center">
+                            <label 
+                                class="core-chip-clickable" 
+                                :class="{ 'core-chip-inactive': !historyTotalVisibility }"
+                                style="border-left: 4px solid #0f172a; background-color: #f1f5f9;">
+                                <input 
+                                    type="checkbox" 
+                                    class="form-check-input me-1 my-0" 
+                                    :checked="historyTotalVisibility"
+                                    @change="toggleHistoryTotal">
+                                <span>Total CPU</span>
+                            </label>
+
+                            <label 
+                                v-for="idx in (systemInfo.processorCount || 12)" 
+                                :key="idx - 1" 
+                                class="core-chip-clickable" 
+                                :class="{ 'core-chip-inactive': !historyCoreVisibility[idx - 1] }"
+                                :style="{ borderLeft: '4px solid ' + generateCoreColor(idx - 1, systemInfo.processorCount || 12) }">
+                                <input 
+                                    type="checkbox" 
+                                    class="form-check-input me-1 my-0" 
+                                    :checked="historyCoreVisibility[idx - 1]"
+                                    @change="toggleHistoryCore(idx - 1)">
+                                <span>Core {{ idx - 1 }}</span>
+                            </label>
+                        </div>
+
+                        <!-- Checkbox Chips Pilihan Series untuk Histori Semua Metrik Gabungan -->
+                        <div v-if="selectedMetric === 'all'" class="mb-3 d-flex flex-wrap align-items-center">
+                            <label 
+                                class="core-chip-clickable" 
+                                :class="{ 'core-chip-inactive': !historyAllVisibility.cpu }"
+                                style="border-left: 4px solid #0284c7;">
+                                <input 
+                                    type="checkbox" 
+                                    class="form-check-input me-1 my-0" 
+                                    :checked="historyAllVisibility.cpu"
+                                    @change="toggleHistoryAll('cpu')">
+                                <span>CPU Total (%)</span>
+                            </label>
+
+                            <label 
+                                class="core-chip-clickable" 
+                                :class="{ 'core-chip-inactive': !historyAllVisibility.ram }"
+                                style="border-left: 4px solid #7c3aed;">
+                                <input 
+                                    type="checkbox" 
+                                    class="form-check-input me-1 my-0" 
+                                    :checked="historyAllVisibility.ram"
+                                    @change="toggleHistoryAll('ram')">
+                                <span>RAM (%)</span>
+                            </label>
+
+                            <label 
+                                class="core-chip-clickable" 
+                                :class="{ 'core-chip-inactive': !historyAllVisibility.disk }"
+                                style="border-left: 4px solid #d97706;">
+                                <input 
+                                    type="checkbox" 
+                                    class="form-check-input me-1 my-0" 
+                                    :checked="historyAllVisibility.disk"
+                                    @change="toggleHistoryAll('disk')">
+                                <span>Disk D (%)</span>
+                            </label>
+
+                            <label 
+                                class="core-chip-clickable" 
+                                :class="{ 'core-chip-inactive': !historyAllVisibility.network }"
+                                style="border-left: 4px solid #059669;">
+                                <input 
+                                    type="checkbox" 
+                                    class="form-check-input me-1 my-0" 
+                                    :checked="historyAllVisibility.network"
+                                    @change="toggleHistoryAll('network')">
+                                <span>Total Network (%)</span>
+                            </label>
+                        </div>
+
+                        <!-- Canvas Chart Histori -->
+                        <div class="chart-container-history">
+                            <canvas id="historyCanvas"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Pemuatan Library Lokal 100% Offline -->
+    <script src="lib/vue/vue.global.prod.js"></script>
+    <script src="lib/bootstrap/bootstrap.bundle.min.js"></script>
+    <script src="lib/chartjs/chart.umd.js"></script>
+    <script src="lib/apexcharts/apexcharts.min.js"></script>
+    <script src="lib/signalr/signalr.min.js"></script>
+    <script src="js/app.js?v=2.8"></script>
+</body>
+</html>

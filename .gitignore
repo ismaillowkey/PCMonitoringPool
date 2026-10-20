@@ -1,0 +1,57 @@
+## ======================================================================
+## .gitignore for .NET C# & PCMonitoringCPURam Application
+## ======================================================================
+
+# Build Results & Intermediate Folders
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Binary & Compiled Files
+*.dll
+*.exe
+*.pdb
+*.so
+*.dylib
+*.node
+
+
+# Publish output directories and archives (keep batch scripts in publish folder)
+publish/*/
+publish/*.zip
+publish/*.7z
+!publish/*.bat
+
+# SQLite Database & Write-Ahead Logs
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+
+# Visual Studio & IDE files
+.vs/
+.vscode/
+*.user
+*.userprefs
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Windows System Files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Rider / JetBrains
+.idea/
+*.DotSettings.user
+
+# Temporary and Cache files
+*.tmp
+*.temp
+*.cache
