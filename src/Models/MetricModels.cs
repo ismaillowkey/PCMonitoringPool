@@ -78,6 +78,13 @@ namespace PCMonitoringCPURam.Models
         public string OsDescription { get; set; } = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
         public int ProcessorCount { get; set; } = Environment.ProcessorCount;
         public ulong TotalMemoryBytes { get; set; }
+
+        /// <summary>
+        /// Ambang batas CPU (persen) yang dipakai saat baris log dibuat.
+        /// Dikirim ke frontend supaya tampilan bisa membedakan baris "CPU naik"
+        /// (>= ambang) dan baris "CPU turun" (&lt; ambang) tanpa duplikasi konfigurasi.
+        /// </summary>
+        public double CpuHighThresholdPercent { get; set; } = 100.0;
     }
 
     /// <summary>

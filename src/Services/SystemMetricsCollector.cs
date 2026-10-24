@@ -725,8 +725,40 @@ namespace PCMonitoringCPURam.Services
 
             if (elapsedSec < MinProcessSampleSeconds)
             {
-                // Pemanggilan beruntun: pakai nilai terakhir, jangan hitung dari selang milidetik
-                return _lastProcCpuPercent.TryGetValue(pid, out double cachedPercent) ? cachedPercent : 0.0;
+                // Pemanggilan beruntun: pakai nilai terakhir yang sudah dihitung secara akurat.
+                if (_lastProcCpuPercent.TryGetValue(pid, out double cachedPercent))
+                {
+                    return cachedPercent;
+                }
+
+                // Belum pernah ada nilai akurat untuk PID ini (kondisi khas tepat setelah aplikasi
+                // dijalankan, ketika sampel pertama baru dijadikan baseline). Tanpa cabang ini semua
+                // process akan bernilai 0.0% dan baris log CPU tinggi tersimpan dengan label "(0.0%)".
+                // Hitung dari selang pendek apa adanya, TANPA menggeser baseline, supaya perhitungan
+                // akurat pada selang >= MinProcessSampleSeconds tetap memakai delta yang utuh.
+                if (elapsedSec <= 0.0)
+                {
+                    return 0.0;
+                }
+
+                long shortTicksDiff = currentTicks - prev.totalTicks;
+                if (shortTicksDiff <= 0)
+                {
+                    return 0.0;
+                }
+
+                double shortCpuPercent = (((double)shortTicksDiff / 10000000.0) / (elapsedSec * (double)totalCores)) * 100.0;
+
+                if (shortCpuPercent > 100.0)
+                {
+                    shortCpuPercent = 100.0;
+                }
+
+                // Simpan sebagai nilai cache agar pemanggilan berikutnya dalam selang pendek
+                // tidak kembali menghasilkan 0.0%.
+                _lastProcCpuPercent[pid] = shortCpuPercent;
+
+                return shortCpuPercent;
             }
 
             long ticksDiff = currentTicks - prev.totalTicks;

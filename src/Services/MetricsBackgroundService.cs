@@ -38,6 +38,16 @@ namespace PCMonitoringCPURam.Services
         // Waktu auto-save seketika terakhir (untuk menerapkan cooldown anti-banjir data).
         private DateTime _lastCpuSpikeSaveTime = DateTime.MinValue;
 
+        // Penanda apakah lonjakan CPU yang sedang berlangsung sudah tercatat sebagai baris
+        // "CPU naik" pada tabel CpuHighProcessLog. Dipakai agar baris "CPU turun" hanya
+        // dibuat satu kali untuk setiap lonjakan yang benar-benar tercatat.
+        private bool _isCpuSpikeRowSaved = false;
+
+        // Waktu penulisan baris log CPU tinggi (baris "CPU naik") terakhir.
+        // Dipakai sebagai cooldown khusus untuk baris log, terpisah dari cooldown
+        // penyimpanan metrik sistem, supaya 1 kejadian hanya menghasilkan 1 baris "CPU naik".
+        private DateTime _lastCpuHighLogSaveTime = DateTime.MinValue;
+
         // Jeda minimum antar auto-save sekitera agar CPU yang berkedip di sekitar ambang batas
         // tidak menyebabkan pembanjiran baris di database.
         private const double CpuSpikeSaveCooldownSeconds = 10.0;
@@ -114,19 +124,40 @@ namespace PCMonitoringCPURam.Services
         /// Mencatat 5 process dengan pemakaian CPU tertinggi pada saat CPU mencapai ambang batas.
         /// Data disimpan ke tabel CpuHighProcessLog dan ditampilkan pada tabel log di antarmuka web.
         /// </summary>
-        private void SaveCpuHighProcessLog(double cpuTotalPercent)
+        /// <param name="isCpuDropEvent">
+        /// Bernilai <c>false</c> bila baris dicatat karena CPU naik ke ambang batas (baris "CPU naik").
+        /// Bernilai <c>true</c> bila baris dicatat karena CPU turun dari ambang batas (baris "CPU turun").
+        /// Baris "CPU turun" tidak menambah statistik frekuensi kemunculan process, supaya satu
+        /// kejadian tidak terhitung dua kali.
+        /// </param>
+        private void SaveCpuHighProcessLog(double cpuTotalPercent, bool isCpuDropEvent = false)
         {
             try
             {
                 var topProcesses = _collector.GetTopProcesses();
 
-                // Simpan 5 process dengan CPU tertinggi
-                _database.SaveCpuHighLog(cpuTotalPercent, topProcesses.TopCpu);
+                // updateProcessStats hanya bernilai true untuk baris "CPU naik"
+                bool updateProcessStats = !isCpuDropEvent;
 
-                string top5Names = string.Join(", ", topProcesses.TopCpu.Take(5).Select(x => x.Name));
-                _logger.LogInformation(
-                    "Log CPU tinggi disimpan: CPU {CpuPercent}% - 5 process tertinggi: {ProcessNames}",
-                    cpuTotalPercent, top5Names);
+                // Simpan 5 process dengan CPU tertinggi
+                _database.SaveCpuHighLog(cpuTotalPercent, topProcesses.TopCpu, updateProcessStats);
+
+                // Sertakan persentase CPU pada pesan log agar isi baris log mudah diverifikasi
+                string top5Names = string.Join(", ", topProcesses.TopCpu.Take(5)
+                    .Select(x => string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0}({1:0.0}%)", x.Name, x.CpuPercent)));
+
+                if (isCpuDropEvent)
+                {
+                    _logger.LogInformation(
+                        "Log CPU turun disimpan: CPU {CpuPercent}% - 5 process tertinggi: {ProcessNames}",
+                        cpuTotalPercent, top5Names);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Log CPU tinggi disimpan: CPU {CpuPercent}% - 5 process tertinggi: {ProcessNames}",
+                        cpuTotalPercent, top5Names);
+                }
             }
             catch (Exception ex)
             {
@@ -173,6 +204,12 @@ namespace PCMonitoringCPURam.Services
                     // Inilah yang memicu auto-save seketika pada setiap lonjakan CPU.
                     bool isCpuSpike = snapshot.CpuTotalPercent >= _cpuSpikeThreshold;
                     bool isCpuSpikeRisingEdge = isCpuSpike && !_isCpuSpikeActive;
+
+                    // Deteksi falling edge: CPU baru saja turun di bawah ambang batas (dari atas ke bawah).
+                    // Nilai ini WAJIB dihitung sebelum _isCpuSpikeActive ditimpa, karena setelah
+                    // ditimpa informasi "sebelumnya sedang tinggi" sudah hilang.
+                    bool isCpuSpikeFallingEdge = !isCpuSpike && _isCpuSpikeActive;
+
                     _isCpuSpikeActive = isCpuSpike;
 
                     if (isRegularSaveDue)
@@ -199,10 +236,47 @@ namespace PCMonitoringCPURam.Services
                             _logger.LogInformation(
                                 "Auto-save snapshot metrik (CPU {CpuPercent}% mencapai ambang {Threshold}%) berhasil disimpan ke SQLite pada {Time}",
                                 snapshot.CpuTotalPercent, _cpuSpikeThreshold, now.ToString("yyyy-MM-dd HH:mm:ss"));
-
-                            // Catat 5 process dengan CPU tertinggi pada saat kejadian CPU tinggi
-                            SaveCpuHighProcessLog(snapshot.CpuTotalPercent);
                         }
+                    }
+
+                    // 4b. Catat 1x event pada tabel CpuHighProcessLog:
+                    //     - baris "CPU naik" saat CPU menyentuh ambang batas (100%)
+                    //     - baris "CPU turun" saat CPU turun dari ambang batas tersebut
+                    //     Penulisan baris log sengaja DIPISAH dari blok simpan metrik di atas,
+                    //     supaya event tidak pernah terlewat ketika jadwal simpan rutin per menit
+                    //     kebetulan jatuh pada detik yang sama dengan lonjakan CPU.
+                    if (isCpuSpikeRisingEdge)
+                    {
+                        if (!_isCpuSpikeRowSaved)
+                        {
+                            // Cooldown khusus baris log, supaya CPU yang berkedip
+                            // (100% -> 99% -> 100%) tetap dihitung sebagai 1 event saja.
+                            double secondsSinceCpuHighLogSave = (now - _lastCpuHighLogSaveTime).TotalSeconds;
+                            bool isCpuHighLogCooldownElapsed = _lastCpuHighLogSaveTime == DateTime.MinValue
+                                                              || secondsSinceCpuHighLogSave >= CpuSpikeSaveCooldownSeconds;
+
+                            if (isCpuHighLogCooldownElapsed)
+                            {
+                                // Baris "CPU naik" (CPU = 100%)
+                                SaveCpuHighProcessLog(snapshot.CpuTotalPercent);
+                                _lastCpuHighLogSaveTime = now;
+
+                                // Tandai lonjakan ini sudah punya baris log, sehingga saat CPU
+                                // turun nanti baris "CPU turun" boleh dibuat.
+                                _isCpuSpikeRowSaved = true;
+                            }
+                        }
+                    }
+                    else if (isCpuSpikeFallingEdge)
+                    {
+                        // Baris "CPU turun" (CPU < 100%) hanya dibuat bila lonjakan sebelumnya
+                        // benar-benar tercatat, sehingga 1 event = tepat 1 baris naik + 1 baris turun.
+                        if (_isCpuSpikeRowSaved)
+                        {
+                            SaveCpuHighProcessLog(snapshot.CpuTotalPercent, true);
+                        }
+
+                        _isCpuSpikeRowSaved = false;
                     }
 
                     // 5. Simpan ke SQLite setiap 20 detik untuk data metrik website IIS (retensi 3 hari)

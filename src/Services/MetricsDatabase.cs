@@ -20,6 +20,13 @@ namespace PCMonitoringCPURam.Services
         // Data terlama otomatis dihapus setiap kali ada insert baru.
         private const int MaxCpuHighLogRows = 100;
 
+        // Ambang batas persentase CPU yang membedakan baris "CPU naik" (>= ambang)
+        // dengan baris "CPU turun" (< ambang) pada filter tabel log CPU tinggi.
+        // Nilai ini WAJIB sama dengan ambang yang dipakai MetricsBackgroundService saat
+        // memutuskan kapan baris log dibuat. Diisi dari konfigurasi "MetricThresholds:CpuSpikePercent"
+        // pada saat aplikasi start, sehingga filter "high" dan "low" selalu konsisten.
+        public double CpuHighThresholdPercent { get; set; } = 100.0;
+
         public MetricsDatabase(string? dbPath = null)
         {
             string finalDbPath = "monitoring.db";
@@ -251,8 +258,18 @@ namespace PCMonitoringCPURam.Services
         /// dan otomatis membersihkan data yang lebih tua dari 7 hari.
         /// Setiap kolom Process1 s.d. Process5 berisi label berformat "namaproses(cpu%)",
         /// contoh: "chrome(12.5%)".
+        /// Method ini dipakai untuk dua jenis baris pada tabel yang sama:
+        /// baris "CPU naik" (CPU mencapai ambang batas) dan baris "CPU turun" (CPU turun
+        /// di bawah ambang batas).
         /// </summary>
-        public void SaveCpuHighLog(double cpuTotal, List<ProcessMetricItem> topProcesses)
+        /// <param name="cpuTotal">Persentase CPU total saat baris dicatat.</param>
+        /// <param name="topProcesses">Daftar process dengan pemakaian CPU tertinggi.</param>
+        /// <param name="updateProcessStats">
+        /// Bernilai <c>true</c> untuk baris "CPU naik" agar statistik frekuensi kemunculan process
+        /// ikut diperbarui. Bernilai <c>false</c> untuk baris "CPU turun" agar satu kejadian
+        /// tidak terhitung dua kali pada statistik.
+        /// </param>
+        public void SaveCpuHighLog(double cpuTotal, List<ProcessMetricItem> topProcesses, bool updateProcessStats = true)
         {
             if (topProcesses == null || topProcesses.Count == 0)
             {
@@ -340,8 +357,12 @@ namespace PCMonitoringCPURam.Services
                             trimCommand.ExecuteNonQuery();
                         }
 
-                        // Akumulasi statistik frekuensi kemunculan tiap process
-                        UpdateProcessStats(connection, processNames, DateTime.UtcNow);
+                        // Akumulasi statistik frekuensi kemunculan tiap process.
+                        // Baris "CPU turun" dilewati agar statistik tidak dobel untuk satu kejadian.
+                        if (updateProcessStats)
+                        {
+                            UpdateProcessStats(connection, processNames, DateTime.UtcNow);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -386,11 +407,22 @@ namespace PCMonitoringCPURam.Services
         {
             string nowIso = timestamp.ToString("o");
 
+            // Satu kejadian bisa memuat beberapa instance process yang sama
+            // (misalnya 3x chrome.exe). Statistik harus dihitung per NAMA unik per kejadian,
+            // supaya TotalCount tidak menggelembung dan posisi #1 tetap dihitung sekali.
+            var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             for (int i = 0; i < processNames.Length; i++)
             {
                 string processName = processNames[i];
                 if (string.IsNullOrWhiteSpace(processName))
                 {
+                    continue;
+                }
+
+                if (!seenNames.Add(processName))
+                {
+                    // Nama ini sudah dihitung pada peringkat yang lebih tinggi di kejadian yang sama
                     continue;
                 }
 
@@ -481,7 +513,13 @@ namespace PCMonitoringCPURam.Services
         /// <summary>
         /// Mengambil satu halaman data log CPU tinggi untuk ditampilkan dengan pagination.
         /// </summary>
-        public PagedCpuHighLogResponse GetCpuHighLogsPaged(int page = 1, int pageSize = 10)
+        /// <param name="page">Nomor halaman yang diminta (mulai dari 1).</param>
+        /// <param name="pageSize">Jumlah baris per halaman.</param>
+        /// <param name="cpuFilter">
+        /// Filter baris log: "all" untuk semua baris, "high" untuk baris saat CPU mencapai 100%,
+        /// "low" untuk baris saat CPU turun di bawah 100%.
+        /// </param>
+        public PagedCpuHighLogResponse GetCpuHighLogsPaged(int page = 1, int pageSize = 10, string cpuFilter = "all")
         {
             var response = new PagedCpuHighLogResponse();
 
@@ -495,16 +533,48 @@ namespace PCMonitoringCPURam.Services
                 pageSize = 10;
             }
 
+            // Normalisasi filter tabel log: hanya "high" dan "low" yang dikenali.
+            // Nilai lain (termasuk null) diperlakukan sebagai "all" sehingga semua baris tampil.
+            string normalizedFilter = "all";
+            if (string.Equals(cpuFilter, "high", StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedFilter = "high";
+            }
+            else if (string.Equals(cpuFilter, "low", StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedFilter = "low";
+            }
+
+            // Baris "CPU naik" tersimpan dengan CpuTotal >= 100, sedangkan baris "CPU turun"
+            // tersimpan dengan CpuTotal < 100. Filter cukup memakai batas tersebut, sehingga
+            // tidak diperlukan kolom penanda tambahan pada tabel.
+            bool isFilterActive = normalizedFilter != "all";
+            string whereClause = string.Empty;
+            if (normalizedFilter == "high")
+            {
+                whereClause = "WHERE CpuTotal >= @CpuBoundary";
+            }
+            else if (normalizedFilter == "low")
+            {
+                whereClause = "WHERE CpuTotal < @CpuBoundary";
+            }
+
             lock (_dbLock)
             {
                 using (var connection = new SqliteConnection(_connectionString))
                 {
                     connection.Open();
 
-                    // Hitung total baris
+                    // Hitung total baris sesuai filter yang sedang dipilih
                     int totalCount = 0;
-                    using (var countCommand = new SqliteCommand("SELECT COUNT(*) FROM CpuHighProcessLog;", connection))
+                    string countQuery = "SELECT COUNT(*) FROM CpuHighProcessLog " + whereClause + ";";
+                    using (var countCommand = new SqliteCommand(countQuery, connection))
                     {
+                        if (isFilterActive)
+                        {
+                            countCommand.Parameters.AddWithValue("@CpuBoundary", CpuHighThresholdPercent);
+                        }
+
                         object? result = countCommand.ExecuteScalar();
                         if (result != null)
                         {
@@ -529,6 +599,7 @@ namespace PCMonitoringCPURam.Services
                     string selectQuery = @"
                         SELECT Id, Timestamp, CpuTotal, Process1, Process2, Process3, Process4, Process5
                         FROM CpuHighProcessLog
+                        " + whereClause + @"
                         ORDER BY Id DESC
                         LIMIT @Limit OFFSET @Offset;
                     ";
@@ -538,6 +609,11 @@ namespace PCMonitoringCPURam.Services
                     {
                         command.Parameters.AddWithValue("@Limit", pageSize);
                         command.Parameters.AddWithValue("@Offset", offset);
+
+                        if (isFilterActive)
+                        {
+                            command.Parameters.AddWithValue("@CpuBoundary", CpuHighThresholdPercent);
+                        }
 
                         using (var reader = command.ExecuteReader())
                         {
@@ -634,9 +710,13 @@ namespace PCMonitoringCPURam.Services
                         }
                     }
 
-                    // Total kejadian CPU tinggi yang tercatat
-                    using (var countCommand = new SqliteCommand("SELECT COUNT(*) FROM CpuHighProcessLog;", connection))
+                    // Total kejadian CPU tinggi yang tercatat.
+                    // Tabel menyimpan 2 baris per kejadian (1 baris "CPU naik" + 1 baris "CPU turun"),
+                    // sehingga yang dihitung hanya baris "CPU naik" agar angka kejadian tidak dobel.
+                    using (var countCommand = new SqliteCommand(
+                        "SELECT COUNT(*) FROM CpuHighProcessLog WHERE CpuTotal >= @CpuBoundary;", connection))
                     {
+                        countCommand.Parameters.AddWithValue("@CpuBoundary", CpuHighThresholdPercent);
                         object? result = countCommand.ExecuteScalar();
                         if (result != null)
                         {

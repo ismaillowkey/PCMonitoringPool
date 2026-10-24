@@ -19,7 +19,8 @@ createApp({
             machineName: '-',
             osDescription: '-',
             processorCount: 0,
-            totalMemoryBytes: 0
+            totalMemoryBytes: 0,
+            cpuHighThresholdPercent: 100
         });
 
         // Metrik live terbaru
@@ -140,6 +141,9 @@ createApp({
         const cpuHighLogTotal = ref(0);
         const cpuHighLogTotalPages = ref(0);
 
+        // Filter tabel log CPU tinggi: 'all' (semua), 'high' (saat CPU 100%), 'low' (saat CPU < 100%)
+        const cpuHighLogFilter = ref('all');
+
         // State statistik process yang paling sering muncul saat CPU tinggi
         const cpuHighStats = reactive({
             top1: [],
@@ -242,6 +246,48 @@ createApp({
             return 'bg-light text-muted border';
         }
 
+        // Apakah baris log ini adalah kejadian "CPU turun di bawah ambang"?
+        // Baris "CPU naik" bernilai >= ambang, baris "CPU turun" bernilai < ambang,
+        // jadi ambang batas itu sendiri sudah cukup untuk membedakan keduanya.
+        function isCpuDropLog(cpuTotal) {
+            let value = Number(cpuTotal);
+            if (isNaN(value)) {
+                return false;
+            }
+            let threshold = Number(systemInfo.cpuHighThresholdPercent);
+            if (isNaN(threshold) || threshold <= 0) {
+                threshold = 100;
+            }
+            return value < threshold;
+        }
+
+        // Badge CPU untuk tabel log:
+        //  - kejadian "CPU naik"  -> merah, panah ke atas
+        //  - kejadian "CPU turun" -> hijau, panah ke bawah
+        // Tanpa operator ternary agar gaya kode tetap konsisten.
+        function getCpuLogBadgeClass(cpuTotal) {
+            if (isCpuDropLog(cpuTotal)) {
+                return 'bg-success text-white';
+            }
+            return 'bg-danger text-white';
+        }
+
+        // Ikon panah tren: ke bawah saat CPU turun, ke atas saat CPU naik
+        function getCpuLogTrendIcon(cpuTotal) {
+            if (isCpuDropLog(cpuTotal)) {
+                return '↓';
+            }
+            return '↑';
+        }
+
+        // Tooltip penjelas supaya makna panah tidak ambigu
+        function getCpuLogTrendTitle(cpuTotal) {
+            if (isCpuDropLog(cpuTotal)) {
+                return 'CPU turun di bawah ambang batas';
+            }
+            return 'CPU mencapai ambang batas';
+        }
+
         // Helper format kapasitas memori RAM MB / GB tanpa operator ternary
         function formatMb(mb) {
             if (!mb || mb <= 0) {
@@ -288,7 +334,9 @@ createApp({
             }
 
             try {
-                const url = '/api/metrics/cpu-high-logs?page=' + targetPage + '&pageSize=' + cpuHighLogPageSize;
+                const url = '/api/metrics/cpu-high-logs?page=' + targetPage
+                    + '&pageSize=' + cpuHighLogPageSize
+                    + '&cpu=' + encodeURIComponent(cpuHighLogFilter.value);
                 const response = await fetch(url);
                 if (response.ok) {
                     const data = await response.json();
@@ -316,6 +364,23 @@ createApp({
                 return;
             }
             fetchCpuHighLogs(page);
+        }
+
+        // Mengubah filter tabel log CPU tinggi, lalu memuat ulang dari halaman pertama
+        function setCpuHighLogFilter(value) {
+            // Hanya tiga nilai yang dikenali sesuai pilihan dropdown
+            let newFilter = 'all';
+            if (value === 'high') {
+                newFilter = 'high';
+            }
+            else if (value === 'low') {
+                newFilter = 'low';
+            }
+
+            cpuHighLogFilter.value = newFilter;
+
+            // Kembali ke halaman 1 karena jumlah baris hasil filter bisa berbeda
+            fetchCpuHighLogs(1);
         }
 
         // Fungsi fetch statistik process yang paling sering muncul saat CPU tinggi
@@ -1285,6 +1350,10 @@ createApp({
                         systemInfo.processorCount = data.processorCount;
                         systemInfo.totalMemoryBytes = data.totalMemoryBytes;
 
+                        if (data.cpuHighThresholdPercent > 0) {
+                            systemInfo.cpuHighThresholdPercent = data.cpuHighThresholdPercent;
+                        }
+
                         if (!cpuApexChart) {
                             initCpuApexChart(data.processorCount);
                         }
@@ -1388,6 +1457,8 @@ createApp({
             isLoadingCpuHighLogs,
             fetchCpuHighLogs,
             goToCpuHighLogPage,
+            cpuHighLogFilter,
+            setCpuHighLogFilter,
             cpuHighLogPage,
             cpuHighLogPageNumbers,
             cpuHighLogTotal,
@@ -1396,6 +1467,10 @@ createApp({
             fetchCpuHighStats,
             formatLogDateTime,
             getCpuBadgeClass,
+            isCpuDropLog,
+            getCpuLogBadgeClass,
+            getCpuLogTrendIcon,
+            getCpuLogTrendTitle,
             formatMb,
             historyCoreVisibility,
             historyTotalVisibility,

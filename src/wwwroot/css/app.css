@@ -57,6 +57,21 @@ body {
     border: 1px solid rgba(220, 38, 38, 0.25);
 }
 
+/* Badge CPU pada tabel log: panah tren menempel rapi di kiri angka */
+.cpu-trend-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.28rem;
+    min-width: 74px;
+    justify-content: center;
+}
+
+.cpu-trend-arrow {
+    font-size: 1em;
+    line-height: 1;
+    opacity: 0.95;
+}
+
 .status-dot {
     width: 8px;
     height: 8px;

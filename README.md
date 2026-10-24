@@ -2,6 +2,24 @@
 
 Aplikasi pemantau sumber daya sistem PC real-time berbasis **ASP.NET Core .NET 8**, **SignalR**, dan basis data SQLite (`monitoring.db`). Mendukung pemantauan performa CPU, memori RAM, top 20 proses, disk, dan jaringan secara real-time.
 
+Fitur tambahan: **pencatatan otomatis 5 proses dengan CPU tertinggi** pada saat CPU mencapai ambang batas
+dan pada saat CPU turun kembali di bawahnya, lengkap dengan label `namaproses(cpu%)`, panel statistik
+proses tersering, dan filter/pagination pada antarmuka web (lihat bagian **7. Log Proses Saat CPU Tinggi**).
+
+### Daftar isi
+
+| Bagian | Isi |
+|---|---|
+| [1](#1-kompilasi--publish) | Kompilasi & Publish |
+| [2](#2-menjalankan-langsung-standalone--development) | Menjalankan langsung (development) |
+| [3](#3-deployment-di-windows-iis-internet-information-services) | Deployment di Windows IIS |
+| [4](#4-deployment-sebagai-windows-service-sc-create) | Deployment sebagai Windows Service |
+| [5](#5-konfigurasi-port-portconf) | Konfigurasi port (`port.conf`) |
+| [6](#6-auto-save-saat-cpu-melonjak-lonjakan-100) | Auto-save saat CPU melonjak |
+| [7](#7-log-proses-saat-cpu-tinggi) | Log proses saat CPU tinggi (dual trigger) |
+| [8](#8-dukungan-multi-platform-windows--linux) | Dukungan multi-platform (Windows & Linux) |
+| [9](#9-deployment-di-linux-menggunakan-pm2) | Deployment di Linux dengan PM2 |
+
 ---
 
 ## 1. Kompilasi & Publish
@@ -180,6 +198,10 @@ pada saat persentase CPU melewati ambang batas yang ditentukan (default **100%**
 - Auto-save tidak terjadi dobel dengan penyimpanan rutin: apabila jadwal per menit jatuh pada detik yang sama,
   hanya satu penyimpanan yang dilakukan.
 
+> Auto-save snapshot metrik ini **berbeda** dari pencatatan 5 proses CPU tertinggi (bagian 7).
+> Snapshot metrik menyimpan angka CPU/RAM/disk/jaringan ke tabel `MetricsHistory`, sedangkan bagian 7
+> menyimpan daftar proses ke tabel `CpuHighProcessLog` dan mencatat **dua** momen (naik dan turun).
+
 ### Konfigurasi ambang batas
 Nilai ambang dapat diubah melalui `appsettings.json`:
 
@@ -196,6 +218,12 @@ Nilai ambang dapat diubah melalui `appsettings.json`:
 
 Nilai di luar rentang 1-100 akan diabaikan dan digunakan nilai default `100`.
 
+> **Catatan penting soal nilai `100`:** `CpuTotalPercent` dibulatkan ke satu angka desimal
+> (`Math.Round(..., 1)`) dan dibatasi maksimum 100. Dengan demikian nilai tepat `100.0` sangat jarang
+> tercapai, sehingga ambang `100` membuat fitur ini nyaris tidak pernah terpicu. Untuk pemakaian
+> sehari-hari, pertimbangkan nilai `95` atau `98` agar log benar-benar terbentuk. Filter `high`/`low`
+> pada tabel log otomatis mengikuti nilai yang dipilih — tidak perlu mengubah kode.
+
 ### Melihat riwayat auto-save
 Buka tab histori pada antarmuka web, atau query langsung:
 
@@ -210,12 +238,35 @@ LIMIT 20;
 
 ## 7. Log Proses Saat CPU Tinggi
 
-Pada saat CPU mencapai ambang batas, aplikasi otomatis **mencatat 5 process dengan pemakaian CPU tertinggi**
-pada saat kejadian tersebut. Data disimpan di tabel SQLite terpisah bernama `CpuHighProcessLog`.
+Aplikasi otomatis **mencatat 5 process dengan pemakaian CPU tertinggi** pada dua momen berbeda.
+Data disimpan di tabel SQLite terpisah bernama `CpuHighProcessLog`.
+
+### Dua jenis baris (dual trigger)
+
+| Jenis baris | Kapan dicatat | Nilai `CpuTotal` |
+|---|---|---|
+| **CPU naik** | Tepat saat CPU menyentuh / melewati ambang batas (rising edge) | `>= ambang` |
+| **CPU turun** | Tepat saat CPU turun kembali di bawah ambang batas (falling edge) | `< ambang` |
+
+Aturan penulisan:
+- Setiap kejadian menghasilkan **tepat 1 baris "CPU naik"** dan **tepat 1 baris "CPU turun"**.
+- Baris "CPU turun" hanya dibuat apabila lonjakan sebelumnya benar-benar tercatat sebagai baris "CPU naik",
+  sehingga tidak pernah ada baris "turun" yang berdiri sendiri.
+- Penulisan baris log **dipisah** dari penyimpanan snapshot metrik per menit. Tujuannya agar kejadian
+  tidak terlewat ketika jadwal simpan rutin kebetulan jatuh pada detik yang sama dengan lonjakan CPU.
+- Cooldown **10 detik** diterapkan pada baris "CPU naik", sehingga CPU yang berkedip di sekitar ambang
+  batas (mis. `100% -> 99% -> 100%`) tetap dihitung sebagai satu kejadian.
+
+### Format label process
 
 Setiap kolom process menyimpan **nama process beserta persentase CPU-nya** dengan format
 `namaproses(cpu%)`, contoh: `chrome(12.5%)`. Persentase memakai satu angka desimal dan pemisah
 desimal titik (invariant culture) agar tampilan konsisten di semua konfigurasi regional Windows.
+
+> **Catatan akurasi:** persentase CPU per process dihitung dari selisih *CPU time* antar sampel,
+> dengan selang minimal 0.9 detik. Bila aplikasi baru dijalankan dan belum ada nilai acuan, persentase
+> dihitung dari selang pendek yang tersedia (bukan dipaksa `0.0%`), sehingga label pada baris pertama
+> tetap berisi angka yang wajar.
 
 ### Struktur tabel
 
@@ -248,14 +299,29 @@ LIMIT 20;
 
 ### Endpoint API
 ```http
-GET /api/metrics/cpu-high-logs?page=1&pageSize=10
+GET /api/metrics/cpu-high-logs?page=1&pageSize=10&cpu=all
 ```
 Mengembalikan satu halaman data log (default 10 baris per halaman).
+
+Parameter `cpu` menentukan baris yang diambil:
+
+| Nilai `cpu` | Baris yang dikembalikan |
+|---|---|
+| `all` (default) | Semua baris, baik "CPU naik" maupun "CPU turun" |
+| `high` | Hanya baris "CPU naik" (`CpuTotal >= ambang batas`) |
+| `low` | Hanya baris "CPU turun" (`CpuTotal < ambang batas`) |
+
+Batas pembeda `high`/`low` **mengikuti** nilai `MetricThresholds:CpuSpikePercent` di `appsettings.json`,
+sehingga filter selalu konsisten dengan ambang yang benar-benar dipakai untuk mencatat log.
 
 ```http
 GET /api/metrics/cpu-high-stats?top=10
 ```
 Mengembalikan statistik process yang paling sering muncul saat CPU tinggi.
+
+> Statistik hanya menghitung baris **"CPU naik"**. Baris "CPU turun" tidak menambah statistik, supaya
+> satu kejadian tidak terhitung dua kali. Nama process yang sama dalam satu kejadian (mis. `chrome.exe`
+> muncul 3x di peringkat berbeda) juga hanya dihitung **sekali**.
 
 ### Tampilan di antarmuka web
 Tabel **"Log Proses Saat CPU Tinggi"** berada di **paling bawah** halaman dashboard, dengan kolom
@@ -264,6 +330,48 @@ nama process beserta persentase CPU-nya dalam format `namaproses(cpu%)`, mis. `c
 Tabel dapat digeser ke samping (`overflow-x: auto`) bila lebar layar tidak cukup.
 Data dimuat otomatis saat halaman dibuka dan diperbarui setiap 30 detik, serta dapat dimuat ulang
 manual lewat tombol **Muat Ulang**.
+
+Di atas tabel terdapat **dropdown filter** untuk menyaring jenis baris:
+
+| Pilihan | Menampilkan |
+|---|---|
+| **Show All** | Semua baris |
+| **Saat CPU Mencapai Ambang** | Hanya baris "CPU naik" |
+| **Saat CPU Turun di Bawah Ambang** | Hanya baris "CPU turun" |
+
+Mengubah filter otomatis kembali ke halaman 1, karena jumlah baris hasil penyaringan bisa berbeda.
+
+### Warna & panah penanda jenis kejadian
+
+Kolom `CPU` memakai badge berwarna dan panah tren supaya jenis kejadian langsung terlihat tanpa
+membaca angkanya:
+
+| Tampilan | Arti | Warna |
+|---|---|---|
+| ▲ `100%` | CPU mencapai ambang batas (baris "CPU naik") | Merah (`bg-danger`) |
+| ▼ `56.5%` | CPU turun di bawah ambang batas (baris "CPU turun") | Hijau (`bg-success`) |
+
+Pembeda dihitung dari nilai `CpuTotal` dibandingkan ambang batas: baris dengan `CpuTotal >= ambang`
+dianggap "CPU naik" (panah ▲ merah), baris dengan `CpuTotal < ambang` dianggap "CPU turun"
+(panah ▼ hijau). Arah panah juga muncul sebagai tooltip saat kursor diarahkan ke badge.
+
+Ambang batas yang dipakai UI diambil dari endpoint `/api/metrics/info` (field
+`cpuHighThresholdPercent`) yang nilainya berasal dari `MetricThresholds:CpuSpikePercent`. Jadi bila
+ambang diubah ke `95`, baris `96%` otomatis berwarna merah dan baris `80%` berwarna hijau tanpa perlu
+mengubah kode frontend.
+
+Contoh respons `/api/metrics/info`:
+```json
+{
+  "machineName": "HUJAN-PETIRPC",
+  "osDescription": "Microsoft Windows 10.0.26300",
+  "processorCount": 12,
+  "totalMemoryBytes": 24959852544,
+  "cpuHighThresholdPercent": 100
+}
+```
+
+Di bawah judul tabel juga ada **legenda kecil** yang menampilkan kedua contoh badge beserta artinya.
 
 ### Statistik Process Paling Sering Muncul
 Di atas tabel log terdapat dua panel statistik:
@@ -283,9 +391,96 @@ tabel log sudah dipangkas.
 
 ---
 
-## 8. Deployment di Linux Menggunakan PM2
+## 8. Dukungan Multi-Platform (Windows & Linux)
 
-Aplikasi ini mendukung cross-platform (Linux) untuk membaca metrik CPU/RAM melalui interface `/proc`.
+Aplikasi ini **cross-platform** dan dapat dikompilasi untuk Linux. Seluruh pembacaan metrik inti
+memakai API lintas platform atau file virtual `/proc`, dan bagian khusus Windows dilindungi
+pemeriksaan `OperatingSystem.IsWindows()`.
+
+### Matriks dukungan fitur
+
+| Fitur | Windows | Linux | Sumber data |
+|---|---|---|---|
+| CPU total & per-core | ✅ | ✅ | `PerformanceCounter` / `NtQuerySystemInformation` → `/proc/stat` |
+| RAM total & terpakai | ✅ | ✅ | `GlobalMemoryStatusEx` → `/proc/meminfo` |
+| Disk usage | ✅ | ✅ | `PhysicalDisk` counter → `DriveInfo` |
+| Network per adapter | ✅ | ✅ | `NetworkInterface` (lintas platform) |
+| Top 20 proses (CPU & RAM) | ✅ | ✅ | `NtQuerySystemInformation` → `Process.GetProcesses()` |
+| Log proses saat CPU tinggi | ✅ | ✅ | SQLite (lintas platform) |
+| Metrik website IIS (`w3wp`) | ✅ | ❌ | Khusus Windows — di Linux otomatis kosong |
+
+> Pada Linux, kolom metrik IIS tidak ditampilkan datanya karena IIS tidak tersedia di platform tersebut.
+> Aplikasi tetap berjalan normal tanpa error.
+
+### Cara publish untuk Linux
+
+```bash
+# Framework-dependent (butuh .NET 8 Runtime terpasang di server Linux)
+dotnet publish src/PCMonitoringCPURam.csproj -c Release -r linux-x64 --self-contained false -o publish-linux
+
+# Self-contained (tidak butuh .NET Runtime terpasang, ukuran lebih besar)
+dotnet publish src/PCMonitoringCPURam.csproj -c Release -r linux-x64 --self-contained true -o publish-linux
+```
+
+Hasil publish berisi executable native Linux bernama `PCMonitoringCPURam` (tanpa ekstensi).
+
+> Folder `publish/` dari `create_publish_universal.bat` bersifat **framework-dependent portable**,
+> sehingga isinya bisa dipakai di Linux dengan menjalankan `dotnet PCMonitoringCPURam.dll`.
+> File `PCMonitoringCPURam.exe` di dalamnya hanya dipakai di Windows dan diabaikan di Linux.
+
+### Menjalankan di Linux
+```bash
+# Pastikan .NET 8 Runtime terpasang
+dotnet --list-runtimes
+
+# Jalankan aplikasi
+cd /var/www/pcmonitoring
+dotnet PCMonitoringCPURam.dll
+```
+
+Akses melalui browser di `http://localhost:5055` (dari mesin yang sama).
+Untuk akses dari komputer lain, lihat catatan penting di bawah.
+
+> ### ⚠️ Catatan penting: aplikasi hanya mengikat `localhost`
+>
+> Alamat bind ditetapkan di kode (`src/Program.cs`):
+> ```csharp
+> builder.WebHost.UseUrls($"http://localhost:{portSelection.Port}");
+> ```
+> Akibatnya aplikasi **hanya menerima koneksi dari mesin itu sendiri**. Parameter `--urls` dan
+> variabel lingkungan `ASPNETCORE_URLS` **diabaikan** karena `UseUrls` di kode menimpa keduanya.
+>
+> Ini sudah diuji: menjalankan aplikasi dengan `--urls http://0.0.0.0:5077` maupun
+> `ASPNETCORE_URLS=http://0.0.0.0:5077` tetap menghasilkan `Now listening on: http://localhost:5055`,
+> dan port 5077 tidak pernah terbuka.
+>
+> Bila ingin diakses dari komputer lain di jaringan, ubah baris tersebut menjadi:
+> ```csharp
+> builder.WebHost.UseUrls($"http://0.0.0.0:{portSelection.Port}");
+> ```
+> lalu publish ulang. Sesuaikan juga aturan firewall pada port yang dipakai.
+>
+> Catatan: perilaku ini tidak spesifik Linux — di Windows pun aplikasi hanya bisa diakses dari
+> mesin lokal, kecuali di-hosting lewat **IIS** (port ditentukan binding IIS) atau diubah manual.
+
+### Catatan verifikasi
+
+Yang sudah diverifikasi langsung pada proyek ini:
+
+| Aspek | Status |
+|---|---|
+| `dotnet publish -r linux-x64` berhasil tanpa error | ✅ Terverifikasi |
+| Native library SQLite untuk Linux tersedia (`runtimes/linux-x64/native/libe_sqlite3.so`) | ✅ Terverifikasi |
+| Bagian khusus Windows terlindungi `OperatingSystem.IsWindows()` | ✅ Terverifikasi (pembacaan kode) |
+| Perilaku `--urls` / `ASPNETCORE_URLS` diabaikan | ✅ Terverifikasi (uji jalan aplikasi) |
+| Aplikasi benar-benar dijalankan di mesin Linux | ⚠️ Belum diuji — perlu pengujian di server Linux |
+
+Karena belum diuji langsung di Linux, disarankan melakukan uji coba di server target sebelum
+dipakai produksi, terutama untuk akurasi pembacaan CPU/RAM per-core dan daftar proses.
+
+---
+
+## 9. Deployment di Linux Menggunakan PM2
 
 ### A. Prasyarat di Linux
 1. Pasang **.NET 8 Runtime** di Linux (Ubuntu/Debian/CentOS).
@@ -302,8 +497,13 @@ Salin isi folder `publish` ke server Linux (misalnya ke `/var/www/pcmonitoring`)
 cd /var/www/pcmonitoring
 
 # Jalankan aplikasi menggunakan PM2
-pm2 start "dotnet PCMonitoringCPURam.dll --urls http://0.0.0.0:5055" --name "pc-monitoring"
+pm2 start "dotnet PCMonitoringCPURam.dll" --name "pc-monitoring"
 ```
+
+> **Jangan** memakai `--urls http://0.0.0.0:5055` pada perintah di atas. Argumen tersebut **diabaikan**
+> karena alamat bind sudah ditetapkan lewat `UseUrls` di kode. Bila aplikasi perlu diakses dari
+> komputer lain, ubah `src/Program.cs` menjadi `http://0.0.0.0:{port}` lalu publish ulang
+> (lihat catatan pada bagian **8. Dukungan Multi-Platform**).
 
 ### C. Konfigurasi Autostart Saat Reboot
 Agar PM2 otomatis menyalakan aplikasi ketika server Linux restart:

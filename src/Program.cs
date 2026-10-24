@@ -53,8 +53,16 @@ builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequired
 
 var app = builder.Build();
 
+// Sinkronkan ambang batas CPU untuk filter log dengan konfigurasi yang dipakai
+// MetricsBackgroundService saat memutuskan kapan baris log dibuat.
+// Tanpa ini, filter "high"/"low" memakai batas hardcode yang bisa berbeda dari ambang sebenarnya.
+var backgroundService = app.Services.GetRequiredService<MetricsBackgroundService>();
+var metricsDatabase = app.Services.GetRequiredService<MetricsDatabase>();
+metricsDatabase.CpuHighThresholdPercent = backgroundService.CpuSpikeThreshold;
+
 // Catat port efektif ke log (terlihat di console maupun Windows Event Log saat berjalan sebagai service)
 app.Logger.LogInformation("[PORT] {PortInfo}", portSelection.Describe());
+app.Logger.LogInformation("[THRESHOLD] Ambang batas log CPU tinggi: {Threshold}%", metricsDatabase.CpuHighThresholdPercent);
 
 // Konfirmasi alamat yang benar-benar diikat Kestrel setelah server aktif
 app.Lifetime.ApplicationStarted.Register(() =>
@@ -83,7 +91,9 @@ app.MapGet("/api/metrics/info", (SystemMetricsCollector collector) =>
         MachineName = Environment.MachineName,
         OsDescription = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
         ProcessorCount = collector.CoreCount,
-        TotalMemoryBytes = collector.TotalPhysicalMemoryBytes
+        TotalMemoryBytes = collector.TotalPhysicalMemoryBytes,
+        // Sertakan ambang batas agar UI bisa membedakan baris "CPU naik" dan "CPU turun"
+        CpuHighThresholdPercent = metricsDatabase.CpuHighThresholdPercent
     };
 
     return Results.Ok(info);
@@ -127,7 +137,8 @@ app.MapGet("/api/metrics/top-processes", (SystemMetricsCollector collector) =>
 });
 
 // Endpoint API: Log 5 process CPU tertinggi pada saat CPU mencapai ambang batas tinggi (dengan pagination)
-app.MapGet("/api/metrics/cpu-high-logs", (MetricsDatabase db, int? page, int? pageSize) =>
+// Parameter "cpu" dipakai untuk memfilter baris: all (semua), high (saat CPU 100%), low (saat CPU < 100%)
+app.MapGet("/api/metrics/cpu-high-logs", (MetricsDatabase db, int? page, int? pageSize, string? cpu) =>
 {
     try
     {
@@ -144,7 +155,19 @@ app.MapGet("/api/metrics/cpu-high-logs", (MetricsDatabase db, int? page, int? pa
             currentPageSize = 10;
         }
 
-        var pagedLogs = db.GetCpuHighLogsPaged(currentPage, currentPageSize);
+        // Normalisasi filter: hanya "high" dan "low" yang dikenali,
+        // nilai lain (termasuk null) diperlakukan sebagai "all".
+        string currentCpuFilter = "all";
+        if (string.Equals(cpu, "high", StringComparison.OrdinalIgnoreCase))
+        {
+            currentCpuFilter = "high";
+        }
+        else if (string.Equals(cpu, "low", StringComparison.OrdinalIgnoreCase))
+        {
+            currentCpuFilter = "low";
+        }
+
+        var pagedLogs = db.GetCpuHighLogsPaged(currentPage, currentPageSize, currentCpuFilter);
         return Results.Ok(pagedLogs);
     }
     catch (Exception ex)
