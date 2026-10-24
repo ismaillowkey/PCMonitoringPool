@@ -3,11 +3,35 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Hosting.WindowsServices;
 using PCMonitoringCPURam.Hubs;
 using PCMonitoringCPURam.Models;
 using PCMonitoringCPURam.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+WebApplicationOptions webAppOptions;
+
+// Jika aplikasi dijalankan sebagai Windows Service, pastikan ContentRootPath mengarah ke direktori aplikasi
+// (bukan C:\Windows\System32) agar file wwwroot dan appsettings.json terbaca dengan benar
+if (WindowsServiceHelpers.IsWindowsService())
+{
+    webAppOptions = new WebApplicationOptions
+    {
+        Args = args,
+        ContentRootPath = AppContext.BaseDirectory
+    };
+}
+else
+{
+    webAppOptions = new WebApplicationOptions
+    {
+        Args = args
+    };
+}
+
+var builder = WebApplication.CreateBuilder(webAppOptions);
+
+// Aktifkan dukungan eksekusi sebagai Windows Service
+builder.Host.UseWindowsService();
 
 // Daftarkan layanan SignalR untuk transmisi data real-time
 builder.Services.AddSignalR();
@@ -75,6 +99,27 @@ app.MapGet("/api/metrics/top-processes", (SystemMetricsCollector collector) =>
     catch (Exception ex)
     {
         Console.WriteLine($"[API_TOP_PROCESSES_ERROR] {ex.Message}");
+        return Results.Problem(ex.Message);
+    }
+});
+
+// Endpoint API: Log 5 process CPU tertinggi pada saat CPU mencapai ambang batas tinggi
+app.MapGet("/api/metrics/cpu-high-logs", (MetricsDatabase db, int? limit) =>
+{
+    try
+    {
+        int maxRows = limit ?? 100;
+        if (maxRows <= 0 || maxRows > 500)
+        {
+            maxRows = 100;
+        }
+
+        var logs = db.GetCpuHighLogs(maxRows);
+        return Results.Ok(logs);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[API_CPU_HIGH_LOGS_ERROR] {ex.Message}");
         return Results.Problem(ex.Message);
     }
 });
