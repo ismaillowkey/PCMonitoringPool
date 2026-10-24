@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -14,6 +15,10 @@ namespace PCMonitoringCPURam.Services
     {
         private static readonly object _dbLock = new object();
         private readonly string _connectionString;
+
+        // Batas maksimal jumlah baris pada tabel log CPU tinggi.
+        // Data terlama otomatis dihapus setiap kali ada insert baru.
+        private const int MaxCpuHighLogRows = 100;
 
         public MetricsDatabase(string? dbPath = null)
         {
@@ -80,6 +85,13 @@ namespace PCMonitoringCPURam.Services
                             Process5 TEXT NOT NULL DEFAULT ''
                         );
                         CREATE INDEX IF NOT EXISTS idx_cpu_high_timestamp ON CpuHighProcessLog(Timestamp);
+
+                        CREATE TABLE IF NOT EXISTS CpuHighProcessStats (
+                            ProcessName TEXT NOT NULL PRIMARY KEY,
+                            Rank1Count INTEGER NOT NULL DEFAULT 0,
+                            TotalCount INTEGER NOT NULL DEFAULT 0,
+                            LastSeen TEXT NOT NULL
+                        );
                     ";
 
                     using (var command = new SqliteCommand(createTableQuery, connection))
@@ -236,7 +248,9 @@ namespace PCMonitoringCPURam.Services
 
         /// <summary>
         /// Menyimpan log 5 process dengan CPU tertinggi pada saat CPU mencapai ambang batas tinggi
-        /// dan otomatis membersihkan data yang lebih tua dari 7 hari
+        /// dan otomatis membersihkan data yang lebih tua dari 7 hari.
+        /// Setiap kolom Process1 s.d. Process5 berisi label berformat "namaproses(cpu%)",
+        /// contoh: "chrome(12.5%)".
         /// </summary>
         public void SaveCpuHighLog(double cpuTotal, List<ProcessMetricItem> topProcesses)
         {
@@ -248,17 +262,24 @@ namespace PCMonitoringCPURam.Services
             // Ambil maksimal 5 process teratas
             var top5 = topProcesses.Take(5).ToList();
 
-            // Siapkan nama process, posisi yang kosong diisi string kosong
+            // Siapkan label process berformat "namaproses(cpu%)" untuk kolom Process1 s.d. Process5,
+            // posisi yang kosong diisi string kosong
+            string[] processLabels = new string[5];
+
+            // Nama process tanpa embel-embel persentase, dipakai khusus untuk statistik frekuensi kemunculan
             string[] processNames = new string[5];
-            for (int i = 0; i < processNames.Length; i++)
+
+            for (int i = 0; i < processLabels.Length; i++)
             {
                 if (i < top5.Count)
                 {
                     processNames[i] = top5[i].Name ?? string.Empty;
+                    processLabels[i] = FormatProcessLabel(processNames[i], top5[i].CpuPercent);
                 }
                 else
                 {
                     processNames[i] = string.Empty;
+                    processLabels[i] = string.Empty;
                 }
             }
 
@@ -284,11 +305,11 @@ namespace PCMonitoringCPURam.Services
                         {
                             command.Parameters.AddWithValue("@Timestamp", DateTime.UtcNow.ToString("o"));
                             command.Parameters.AddWithValue("@CpuTotal", cpuTotal);
-                            command.Parameters.AddWithValue("@Process1", processNames[0]);
-                            command.Parameters.AddWithValue("@Process2", processNames[1]);
-                            command.Parameters.AddWithValue("@Process3", processNames[2]);
-                            command.Parameters.AddWithValue("@Process4", processNames[3]);
-                            command.Parameters.AddWithValue("@Process5", processNames[4]);
+                            command.Parameters.AddWithValue("@Process1", processLabels[0]);
+                            command.Parameters.AddWithValue("@Process2", processLabels[1]);
+                            command.Parameters.AddWithValue("@Process3", processLabels[2]);
+                            command.Parameters.AddWithValue("@Process4", processLabels[3]);
+                            command.Parameters.AddWithValue("@Process5", processLabels[4]);
 
                             command.ExecuteNonQuery();
                         }
@@ -302,11 +323,94 @@ namespace PCMonitoringCPURam.Services
                             deleteCommand.Parameters.AddWithValue("@CutoffDate", cutoffDate.ToString("o"));
                             deleteCommand.ExecuteNonQuery();
                         }
+
+                        // Batasi jumlah baris log maksimal 100 baris (data terlama dihapus)
+                        string trimQuery = @"
+                            DELETE FROM CpuHighProcessLog
+                            WHERE Id NOT IN (
+                                SELECT Id FROM CpuHighProcessLog
+                                ORDER BY Id DESC
+                                LIMIT @MaxRows
+                            );
+                        ";
+
+                        using (var trimCommand = new SqliteCommand(trimQuery, connection))
+                        {
+                            trimCommand.Parameters.AddWithValue("@MaxRows", MaxCpuHighLogRows);
+                            trimCommand.ExecuteNonQuery();
+                        }
+
+                        // Akumulasi statistik frekuensi kemunculan tiap process
+                        UpdateProcessStats(connection, processNames, DateTime.UtcNow);
                     }
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[CPU_HIGH_LOG_DB_ERROR] Gagal menyimpan log CPU tinggi: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Membentuk label process untuk log CPU tinggi dengan format "namaproses(cpu%)",
+        /// contoh: "chrome(12.5%)". Nama process kosong dikembalikan sebagai string kosong.
+        /// Persentase selalu memakai satu angka desimal dan pemisah desimal titik (invariant culture)
+        /// agar tampilan konsisten di semua konfigurasi regional Windows.
+        /// </summary>
+        private static string FormatProcessLabel(string processName, double cpuPercent)
+        {
+            if (string.IsNullOrWhiteSpace(processName))
+            {
+                return string.Empty;
+            }
+
+            double safePercent = cpuPercent;
+            if (safePercent < 0.0)
+            {
+                safePercent = 0.0;
+            }
+            else if (safePercent > 100.0)
+            {
+                safePercent = 100.0;
+            }
+
+            string percentText = safePercent.ToString("0.0", CultureInfo.InvariantCulture);
+            return processName + "(" + percentText + "%)";
+        }
+
+        /// <summary>
+        /// Memperbarui statistik frekuensi kemunculan process pada log CPU tinggi.
+        /// Process di peringkat #1 menambah Rank1Count, seluruh process #1 s/d #5 menambah TotalCount.
+        /// </summary>
+        private static void UpdateProcessStats(SqliteConnection connection, string[] processNames, DateTime timestamp)
+        {
+            string nowIso = timestamp.ToString("o");
+
+            for (int i = 0; i < processNames.Length; i++)
+            {
+                string processName = processNames[i];
+                if (string.IsNullOrWhiteSpace(processName))
+                {
+                    continue;
+                }
+
+                int rank1Increment = (i == 0) ? 1 : 0;
+
+                string upsertQuery = @"
+                    INSERT INTO CpuHighProcessStats (ProcessName, Rank1Count, TotalCount, LastSeen)
+                    VALUES (@ProcessName, @Rank1Increment, 1, @LastSeen)
+                    ON CONFLICT(ProcessName) DO UPDATE SET
+                        Rank1Count = Rank1Count + @Rank1Increment,
+                        TotalCount = TotalCount + 1,
+                        LastSeen = @LastSeen;
+                ";
+
+                using (var command = new SqliteCommand(upsertQuery, connection))
+                {
+                    command.Parameters.AddWithValue("@ProcessName", processName);
+                    command.Parameters.AddWithValue("@Rank1Increment", rank1Increment);
+                    command.Parameters.AddWithValue("@LastSeen", nowIso);
+                    command.ExecuteNonQuery();
                 }
             }
         }
@@ -335,7 +439,6 @@ namespace PCMonitoringCPURam.Services
                         ORDER BY Id DESC
                         LIMIT @Limit;
                     ";
-
                     using (var command = new SqliteCommand(selectQuery, connection))
                     {
                         command.Parameters.AddWithValue("@Limit", limit);
@@ -373,6 +476,194 @@ namespace PCMonitoringCPURam.Services
             }
 
             return records;
+        }
+
+        /// <summary>
+        /// Mengambil satu halaman data log CPU tinggi untuk ditampilkan dengan pagination.
+        /// </summary>
+        public PagedCpuHighLogResponse GetCpuHighLogsPaged(int page = 1, int pageSize = 10)
+        {
+            var response = new PagedCpuHighLogResponse();
+
+            if (page <= 0)
+            {
+                page = 1;
+            }
+
+            if (pageSize <= 0)
+            {
+                pageSize = 10;
+            }
+
+            lock (_dbLock)
+            {
+                using (var connection = new SqliteConnection(_connectionString))
+                {
+                    connection.Open();
+
+                    // Hitung total baris
+                    int totalCount = 0;
+                    using (var countCommand = new SqliteCommand("SELECT COUNT(*) FROM CpuHighProcessLog;", connection))
+                    {
+                        object? result = countCommand.ExecuteScalar();
+                        if (result != null)
+                        {
+                            totalCount = Convert.ToInt32(result);
+                        }
+                    }
+
+                    int totalPages = totalCount / pageSize;
+                    if (totalCount % pageSize != 0)
+                    {
+                        totalPages++;
+                    }
+
+                    // Jika halaman diminta melewati jumlah halaman, ambil halaman terakhir
+                    if (totalPages > 0 && page > totalPages)
+                    {
+                        page = totalPages;
+                    }
+
+                    int offset = (page - 1) * pageSize;
+
+                    string selectQuery = @"
+                        SELECT Id, Timestamp, CpuTotal, Process1, Process2, Process3, Process4, Process5
+                        FROM CpuHighProcessLog
+                        ORDER BY Id DESC
+                        LIMIT @Limit OFFSET @Offset;
+                    ";
+
+                    var items = new List<CpuHighLogRecord>();
+                    using (var command = new SqliteCommand(selectQuery, connection))
+                    {
+                        command.Parameters.AddWithValue("@Limit", pageSize);
+                        command.Parameters.AddWithValue("@Offset", offset);
+
+                        using (var reader = command.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var record = new CpuHighLogRecord();
+                                record.Id = reader.GetInt64(0);
+
+                                string timestampString = reader.GetString(1);
+                                DateTime parsedTimestamp;
+                                if (DateTime.TryParse(timestampString, out parsedTimestamp))
+                                {
+                                    record.Timestamp = parsedTimestamp;
+                                }
+                                else
+                                {
+                                    record.Timestamp = DateTime.UtcNow;
+                                }
+
+                                record.CpuTotal = reader.GetDouble(2);
+                                record.Process1 = reader.GetString(3);
+                                record.Process2 = reader.GetString(4);
+                                record.Process3 = reader.GetString(5);
+                                record.Process4 = reader.GetString(6);
+                                record.Process5 = reader.GetString(7);
+
+                                items.Add(record);
+                            }
+                        }
+                    }
+
+                    response.Items = items;
+                    response.TotalCount = totalCount;
+                    response.Page = page;
+                    response.PageSize = pageSize;
+                    response.TotalPages = totalPages;
+                }
+            }
+
+            return response;
+        }
+
+        /// <summary>
+        /// Mengambil statistik process yang paling sering muncul saat CPU tinggi.
+        /// Top1 = process yang sering menduduki peringkat #1
+        /// TopAny = process yang sering masuk daftar #1 s/d #5
+        /// </summary>
+        public CpuHighStatsResponse GetCpuHighStats(int topLimit = 10)
+        {
+            var response = new CpuHighStatsResponse();
+
+            if (topLimit <= 0)
+            {
+                topLimit = 10;
+            }
+
+            lock (_dbLock)
+            {
+                using (var connection = new SqliteConnection(_connectionString))
+                {
+                    connection.Open();
+
+                    // Ambil seluruh statistik untuk dihitung di memori
+                    var allStats = new List<CpuHighProcessStatItem>();
+                    string selectQuery = @"
+                        SELECT ProcessName, Rank1Count, TotalCount, LastSeen
+                        FROM CpuHighProcessStats;
+                    ";
+
+                    using (var command = new SqliteCommand(selectQuery, connection))
+                    {
+                        using (var reader = command.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var stat = new CpuHighProcessStatItem();
+                                stat.ProcessName = reader.GetString(0);
+                                stat.Rank1Count = reader.GetInt32(1);
+                                stat.TotalCount = reader.GetInt32(2);
+
+                                string lastSeenString = reader.GetString(3);
+                                DateTime parsedLastSeen;
+                                if (DateTime.TryParse(lastSeenString, out parsedLastSeen))
+                                {
+                                    stat.LastSeen = parsedLastSeen;
+                                }
+                                else
+                                {
+                                    stat.LastSeen = DateTime.UtcNow;
+                                }
+
+                                allStats.Add(stat);
+                            }
+                        }
+                    }
+
+                    // Total kejadian CPU tinggi yang tercatat
+                    using (var countCommand = new SqliteCommand("SELECT COUNT(*) FROM CpuHighProcessLog;", connection))
+                    {
+                        object? result = countCommand.ExecuteScalar();
+                        if (result != null)
+                        {
+                            response.TotalEvents = Convert.ToInt32(result);
+                        }
+                    }
+
+                    // Top 1: process yang paling sering menduduki peringkat #1
+                    response.Top1 = allStats
+                        .Where(x => x.Rank1Count > 0)
+                        .OrderByDescending(x => x.Rank1Count)
+                        .ThenByDescending(x => x.TotalCount)
+                        .ThenBy(x => x.ProcessName)
+                        .Take(topLimit)
+                        .ToList();
+
+                    // Top Any: process yang paling sering masuk daftar #1 s/d #5
+                    response.TopAny = allStats
+                        .OrderByDescending(x => x.TotalCount)
+                        .ThenByDescending(x => x.Rank1Count)
+                        .ThenBy(x => x.ProcessName)
+                        .Take(topLimit)
+                        .ToList();
+                }
+            }
+
+            return response;
         }
 
         /// <summary>

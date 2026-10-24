@@ -80,6 +80,16 @@ namespace PCMonitoringCPURam.Services
 
         // Penyimpanan riwayat CPU time proses untuk kalkulasi persentase CPU per proses via Native NT API
         private readonly Dictionary<int, (DateTime timestamp, long totalTicks)> _prevProcTicks = new Dictionary<int, (DateTime, long)>();
+
+        // Nilai CPU% terakhir per proses. Dipakai saat GetTopProcesses() dipanggil beruntun
+        // (misalnya RequestTopProcesses dari browser, broadcast 10 detik, dan auto-save saat CPU tinggi).
+        // Tanpa cache ini, selisih CPU time dibagi selang waktu yang sangat pendek (milidetik)
+        // sehingga persentase CPU per proses menjadi tidak akurat.
+        private readonly Dictionary<int, double> _lastProcCpuPercent = new Dictionary<int, double>();
+
+        // Selang minimal antar sampel CPU per proses. Jika pemanggilan terjadi lebih cepat
+        // dari nilai ini, nilai cache terakhir yang dipakai.
+        private const double MinProcessSampleSeconds = 0.9;
         // Riwayat CPU per core via Native NT API
         private readonly List<(long idle, long kernel, long user)> _prevCpuCoreTimes = new List<(long, long, long)>();
 
@@ -698,6 +708,48 @@ namespace PCMonitoringCPURam.Services
         }
 
         /// <summary>
+        /// Menghitung persentase CPU satu proses berdasarkan selisih CPU time sejak sampel sebelumnya.
+        /// Jika pemanggilan terjadi terlalu cepat (kurang dari <see cref="MinProcessSampleSeconds"/>),
+        /// nilai cache terakhir yang dipakai agar persentase tetap akurat dan tidak melonjak palsu.
+        /// </summary>
+        private double CalculateProcessCpuPercent(int pid, DateTime now, long currentTicks, int totalCores)
+        {
+            if (!_prevProcTicks.TryGetValue(pid, out var prev))
+            {
+                // Sampel pertama untuk PID ini: jadikan baseline, CPU% belum bisa dihitung
+                _prevProcTicks[pid] = (now, currentTicks);
+                return 0.0;
+            }
+
+            double elapsedSec = (now - prev.timestamp).TotalSeconds;
+
+            if (elapsedSec < MinProcessSampleSeconds)
+            {
+                // Pemanggilan beruntun: pakai nilai terakhir, jangan hitung dari selang milidetik
+                return _lastProcCpuPercent.TryGetValue(pid, out double cachedPercent) ? cachedPercent : 0.0;
+            }
+
+            long ticksDiff = currentTicks - prev.totalTicks;
+            double cpuPercent = 0.0;
+
+            if (ticksDiff > 0)
+            {
+                double cpuSeconds = (double)ticksDiff / 10000000.0;
+                cpuPercent = (cpuSeconds / (elapsedSec * (double)totalCores)) * 100.0;
+
+                if (cpuPercent > 100.0)
+                {
+                    cpuPercent = 100.0;
+                }
+            }
+
+            _prevProcTicks[pid] = (now, currentTicks);
+            _lastProcCpuPercent[pid] = cpuPercent;
+
+            return cpuPercent;
+        }
+
+        /// <summary>
         /// Membaca seluruh proses Windows melalui kernel snapshot (NtQuerySystemInformation)
         /// Tanpa membutuhkan OpenProcess, sehingga tidak terkena 'Access Denied' pada proses SYSTEM / Services
         /// </summary>
@@ -784,26 +836,7 @@ namespace PCMonitoringCPURam.Services
 
                         // Kalkulasi persentase CPU per proses
                         long currentTicks = userTime + kernelTime;
-                        double cpuPercent = 0.0;
-
-                        if (_prevProcTicks.TryGetValue(pid, out var prev))
-                        {
-                            double elapsedSec = (now - prev.timestamp).TotalSeconds;
-                            long ticksDiff = currentTicks - prev.totalTicks;
-
-                            if (elapsedSec > 0.0 && ticksDiff > 0)
-                            {
-                                double cpuSeconds = (double)ticksDiff / 10000000.0;
-                                cpuPercent = (cpuSeconds / (elapsedSec * (double)totalCores)) * 100.0;
-
-                                if (cpuPercent > 100.0)
-                                {
-                                    cpuPercent = 100.0;
-                                }
-                            }
-                        }
-
-                        _prevProcTicks[pid] = (now, currentTicks);
+                        double cpuPercent = CalculateProcessCpuPercent(pid, now, currentTicks, totalCores);
 
                         processList.Add(new ProcessMetricItem
                         {
@@ -830,6 +863,7 @@ namespace PCMonitoringCPURam.Services
                     foreach (var dead in deadPids)
                     {
                         _prevProcTicks.Remove(dead);
+                        _lastProcCpuPercent.Remove(dead);
                     }
                 }
 
@@ -877,23 +911,7 @@ namespace PCMonitoringCPURam.Services
                     try
                     {
                         TimeSpan currentCpuTime = p.TotalProcessorTime;
-                        if (_prevProcTicks.TryGetValue(p.Id, out var prev))
-                        {
-                            double elapsedSec = (now - prev.timestamp).TotalSeconds;
-                            long currentTicks = currentCpuTime.Ticks;
-                            long ticksDiff = currentTicks - prev.totalTicks;
-
-                            if (elapsedSec > 0.0 && ticksDiff > 0)
-                            {
-                                double cpuSec = (double)ticksDiff / 10000000.0;
-                                cpuPercent = (cpuSec / (elapsedSec * (double)totalCores)) * 100.0;
-                                if (cpuPercent > 100.0)
-                                {
-                                    cpuPercent = 100.0;
-                                }
-                            }
-                        }
-                        _prevProcTicks[p.Id] = (now, currentCpuTime.Ticks);
+                        cpuPercent = CalculateProcessCpuPercent(p.Id, now, currentCpuTime.Ticks, totalCores);
                     }
                     catch
                     {

@@ -134,6 +134,19 @@ createApp({
         const cpuHighLogs = ref([]);
         const isLoadingCpuHighLogs = ref(false);
 
+        // State pagination untuk tabel log CPU tinggi (10 baris per halaman)
+        const cpuHighLogPage = ref(1);
+        const cpuHighLogPageSize = 10;
+        const cpuHighLogTotal = ref(0);
+        const cpuHighLogTotalPages = ref(0);
+
+        // State statistik process yang paling sering muncul saat CPU tinggi
+        const cpuHighStats = reactive({
+            top1: [],
+            topAny: [],
+            totalEvents: 0
+        });
+
         // Objek instance chart dan koneksi SignalR
         let cpuApexChart = null;
         let ramLiveChart = null;
@@ -241,8 +254,8 @@ createApp({
             return mb.toFixed(1) + ' MB';
         }
 
-        // Format tanggal (dd/MM/yyyy) untuk tabel log CPU tinggi
-        function formatLogDate(timestamp) {
+        // Format tanggal & jam gabungan (dd/MM/yyyy HH:mm:ss) untuk tabel log CPU tinggi
+        function formatLogDateTime(timestamp) {
             if (!timestamp) {
                 return '-';
             }
@@ -253,39 +266,37 @@ createApp({
             const day = String(dt.getDate()).padStart(2, '0');
             const month = String(dt.getMonth() + 1).padStart(2, '0');
             const year = dt.getFullYear();
-            return day + '/' + month + '/' + year;
-        }
-
-        // Format jam (HH:mm:ss) untuk tabel log CPU tinggi
-        function formatLogTime(timestamp) {
-            if (!timestamp) {
-                return '-';
-            }
-            const dt = new Date(timestamp);
-            if (isNaN(dt.getTime())) {
-                return '-';
-            }
             const hour = String(dt.getHours()).padStart(2, '0');
             const minute = String(dt.getMinutes()).padStart(2, '0');
             const second = String(dt.getSeconds()).padStart(2, '0');
-            return hour + ':' + minute + ':' + second;
+            return day + '/' + month + '/' + year + ' ' + hour + ':' + minute + ':' + second;
         }
 
-        // Fungsi fetch log proses saat CPU mencapai ambang batas tinggi
+        // Fungsi fetch log proses saat CPU mencapai ambang batas tinggi (dengan pagination)
         let isFetchingCpuHighLogs = false;
-        async function fetchCpuHighLogs() {
+        async function fetchCpuHighLogs(page) {
             if (isFetchingCpuHighLogs) {
                 return;
             }
             isFetchingCpuHighLogs = true;
             isLoadingCpuHighLogs.value = true;
 
+            // Tentukan halaman yang diminta (default: halaman saat ini)
+            let targetPage = cpuHighLogPage.value;
+            if (page !== undefined && page !== null && page > 0) {
+                targetPage = page;
+            }
+
             try {
-                const response = await fetch('/api/metrics/cpu-high-logs?limit=100');
+                const url = '/api/metrics/cpu-high-logs?page=' + targetPage + '&pageSize=' + cpuHighLogPageSize;
+                const response = await fetch(url);
                 if (response.ok) {
                     const data = await response.json();
-                    if (Array.isArray(data)) {
-                        cpuHighLogs.value = data;
+                    if (data && Array.isArray(data.items)) {
+                        cpuHighLogs.value = data.items;
+                        cpuHighLogPage.value = data.page;
+                        cpuHighLogTotal.value = data.totalCount;
+                        cpuHighLogTotalPages.value = data.totalPages;
                     }
                 }
             } catch (err) {
@@ -295,6 +306,74 @@ createApp({
                 isLoadingCpuHighLogs.value = false;
             }
         }
+
+        // Navigasi ke halaman tertentu pada tabel log CPU tinggi
+        function goToCpuHighLogPage(page) {
+            if (page < 1) {
+                return;
+            }
+            if (cpuHighLogTotalPages.value > 0 && page > cpuHighLogTotalPages.value) {
+                return;
+            }
+            fetchCpuHighLogs(page);
+        }
+
+        // Fungsi fetch statistik process yang paling sering muncul saat CPU tinggi
+        let isFetchingCpuHighStats = false;
+        async function fetchCpuHighStats() {
+            if (isFetchingCpuHighStats) {
+                return;
+            }
+            isFetchingCpuHighStats = true;
+
+            try {
+                const response = await fetch('/api/metrics/cpu-high-stats?top=10');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data) {
+                        cpuHighStats.top1 = data.top1 || [];
+                        cpuHighStats.topAny = data.topAny || [];
+                        cpuHighStats.totalEvents = data.totalEvents || 0;
+                    }
+                }
+            } catch (err) {
+                console.error('Peringatan fetch statistik CPU tinggi:', err);
+            } finally {
+                isFetchingCpuHighStats = false;
+            }
+        }
+
+        // Daftar nomor halaman untuk kontrol pagination (maksimal 5 tombol agar rapi)
+        const cpuHighLogPageNumbers = computed(function() {
+            const total = cpuHighLogTotalPages.value;
+            const current = cpuHighLogPage.value;
+
+            if (total <= 0) {
+                return [];
+            }
+
+            // Tampilkan maksimal 5 nomor halaman di sekitar halaman saat ini
+            let start = current - 2;
+            if (start < 1) {
+                start = 1;
+            }
+
+            let end = start + 4;
+            if (end > total) {
+                end = total;
+                start = end - 4;
+            }
+
+            if (start < 1) {
+                start = 1;
+            }
+
+            const pages = [];
+            for (let i = start; i <= end; i++) {
+                pages.push(i);
+            }
+            return pages;
+        });
 
         // Fungsi fetch Top 20 Program CPU High Usage dan High RAM
         let isFetchingTopProcesses = false;
@@ -1257,11 +1336,19 @@ createApp({
             }, 10000);
 
             // 10. Muat log proses CPU tinggi saat halaman pertama kali dibuka
-            fetchCpuHighLogs();
+            fetchCpuHighLogs(1);
 
-            // 11. Refresh log proses CPU tinggi tiap 30 detik
+            // 11. Muat statistik process CPU tinggi saat halaman pertama kali dibuka
+            fetchCpuHighStats();
+
+            // 12. Refresh log proses CPU tinggi tiap 30 detik
             setInterval(function() {
                 fetchCpuHighLogs();
+            }, 30000);
+
+            // 13. Refresh statistik process CPU tinggi tiap 30 detik
+            setInterval(function() {
+                fetchCpuHighStats();
             }, 30000);
         });
 
@@ -1300,8 +1387,14 @@ createApp({
             cpuHighLogs,
             isLoadingCpuHighLogs,
             fetchCpuHighLogs,
-            formatLogDate,
-            formatLogTime,
+            goToCpuHighLogPage,
+            cpuHighLogPage,
+            cpuHighLogPageNumbers,
+            cpuHighLogTotal,
+            cpuHighLogTotalPages,
+            cpuHighStats,
+            fetchCpuHighStats,
+            formatLogDateTime,
             getCpuBadgeClass,
             formatMb,
             historyCoreVisibility,

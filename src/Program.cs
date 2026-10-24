@@ -28,7 +28,14 @@ else
     };
 }
 
+// Tentukan port HTTP aplikasi:
+// 1) port.conf bila ada & valid & port-nya bebas, 2) port default di C# (5055) bila terjadi error
+PortSelection portSelection = PortConfiguration.Resolve(webAppOptions.ContentRootPath);
+
 var builder = WebApplication.CreateBuilder(webAppOptions);
+
+// Terapkan port hasil resolusi ke Kestrel (menimpa nilai "Urls" pada appsettings.json bila ada)
+builder.WebHost.UseUrls($"http://localhost:{portSelection.Port}");
 
 // Aktifkan dukungan eksekusi sebagai Windows Service
 builder.Host.UseWindowsService();
@@ -45,6 +52,22 @@ builder.Services.AddSingleton<MetricsBackgroundService>();
 builder.Services.AddHostedService(serviceProvider => serviceProvider.GetRequiredService<MetricsBackgroundService>());
 
 var app = builder.Build();
+
+// Catat port efektif ke log (terlihat di console maupun Windows Event Log saat berjalan sebagai service)
+app.Logger.LogInformation("[PORT] {PortInfo}", portSelection.Describe());
+
+// Konfirmasi alamat yang benar-benar diikat Kestrel setelah server aktif
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    try
+    {
+        app.Logger.LogInformation("[PORT] Server aktif di {Urls}", string.Join(", ", app.Urls));
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning("[PORT] Gagal membaca alamat server: {Message}", ex.Message);
+    }
+});
 
 // Aktifkan serving file statis (index.html, JS, CSS) dari wwwroot
 app.UseDefaultFiles();
@@ -103,23 +126,51 @@ app.MapGet("/api/metrics/top-processes", (SystemMetricsCollector collector) =>
     }
 });
 
-// Endpoint API: Log 5 process CPU tertinggi pada saat CPU mencapai ambang batas tinggi
-app.MapGet("/api/metrics/cpu-high-logs", (MetricsDatabase db, int? limit) =>
+// Endpoint API: Log 5 process CPU tertinggi pada saat CPU mencapai ambang batas tinggi (dengan pagination)
+app.MapGet("/api/metrics/cpu-high-logs", (MetricsDatabase db, int? page, int? pageSize) =>
 {
     try
     {
-        int maxRows = limit ?? 100;
-        if (maxRows <= 0 || maxRows > 500)
+        int currentPage = page ?? 1;
+        int currentPageSize = pageSize ?? 10;
+
+        if (currentPage <= 0)
         {
-            maxRows = 100;
+            currentPage = 1;
         }
 
-        var logs = db.GetCpuHighLogs(maxRows);
-        return Results.Ok(logs);
+        if (currentPageSize <= 0 || currentPageSize > 100)
+        {
+            currentPageSize = 10;
+        }
+
+        var pagedLogs = db.GetCpuHighLogsPaged(currentPage, currentPageSize);
+        return Results.Ok(pagedLogs);
     }
     catch (Exception ex)
     {
         Console.WriteLine($"[API_CPU_HIGH_LOGS_ERROR] {ex.Message}");
+        return Results.Problem(ex.Message);
+    }
+});
+
+// Endpoint API: Statistik process yang paling sering muncul saat CPU tinggi
+app.MapGet("/api/metrics/cpu-high-stats", (MetricsDatabase db, int? top) =>
+{
+    try
+    {
+        int topLimit = top ?? 10;
+        if (topLimit <= 0 || topLimit > 50)
+        {
+            topLimit = 10;
+        }
+
+        var stats = db.GetCpuHighStats(topLimit);
+        return Results.Ok(stats);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[API_CPU_HIGH_STATS_ERROR] {ex.Message}");
         return Results.Problem(ex.Message);
     }
 });

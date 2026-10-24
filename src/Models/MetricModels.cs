@@ -113,7 +113,8 @@ namespace PCMonitoringCPURam.Models
 
     /// <summary>
     /// Model data log proses saat CPU mencapai ambang batas tinggi (misal 100%).
-    /// Menyimpan tanggal & jam kejadian serta 5 nama process dengan CPU tertinggi
+    /// Menyimpan tanggal &amp; jam kejadian serta 5 process dengan CPU tertinggi.
+    /// Tiap kolom process berisi label berformat "namaproses(cpu%)", contoh: "chrome(12.5%)".
     /// </summary>
     public class CpuHighLogRecord
     {
@@ -123,11 +124,56 @@ namespace PCMonitoringCPURam.Models
         // Persentase CPU total pada saat kejadian
         public double CpuTotal { get; set; }
 
-        // 5 nama process dengan pemakaian CPU tertinggi saat kejadian
+        // 5 process dengan pemakaian CPU tertinggi saat kejadian, format "namaproses(cpu%)"
         public string Process1 { get; set; } = string.Empty;
         public string Process2 { get; set; } = string.Empty;
         public string Process3 { get; set; } = string.Empty;
         public string Process4 { get; set; } = string.Empty;
         public string Process5 { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Statistik frekuensi kemunculan satu process pada log CPU tinggi
+    /// </summary>
+    public class CpuHighProcessStatItem
+    {
+        // Nama process
+        public string ProcessName { get; set; } = string.Empty;
+
+        // Berapa kali process ini occupying peringkat #1
+        public int Rank1Count { get; set; }
+
+        // Berapa kali process ini masuk daftar #1 s/d #5
+        public int TotalCount { get; set; }
+
+        // Waktu kemunculan terakhir
+        public DateTime LastSeen { get; set; }
+    }
+
+    /// <summary>
+    /// Respons statistik process yang paling sering muncul saat CPU tinggi
+    /// </summary>
+    public class CpuHighStatsResponse
+    {
+        // Process yang paling sering menduduki peringkat #1
+        public List<CpuHighProcessStatItem> Top1 { get; set; } = new List<CpuHighProcessStatItem>();
+
+        // Process yang paling sering masuk daftar #1 s/d #5
+        public List<CpuHighProcessStatItem> TopAny { get; set; } = new List<CpuHighProcessStatItem>();
+
+        // Total jumlah kejadian CPU tinggi yang tercatat
+        public int TotalEvents { get; set; }
+    }
+
+    /// <summary>
+    /// Respons halaman data log CPU tinggi (untuk pagination)
+    /// </summary>
+    public class PagedCpuHighLogResponse
+    {
+        public List<CpuHighLogRecord> Items { get; set; } = new List<CpuHighLogRecord>();
+        public int TotalCount { get; set; }
+        public int Page { get; set; }
+        public int PageSize { get; set; }
+        public int TotalPages { get; set; }
     }
 }

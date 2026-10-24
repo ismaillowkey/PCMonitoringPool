@@ -1,4 +1,4 @@
-gw <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="id">
 <head>
     <meta charset="UTF-8">
@@ -635,75 +635,189 @@ gw <!DOCTYPE html>
                                     Log Proses Saat CPU Tinggi
                                 </h5>
                                 <small class="text-muted">
-                                    Tercatat otomatis saat CPU mencapai ambang batas &bull; Menampilkan 5 process dengan CPU tertinggi &bull; Retensi maksimal 7 hari
+                                    Tercatat otomatis saat CPU mencapai ambang batas &bull; Menampilkan 5 process dengan CPU tertinggi dalam format <code>namaproses(cpu%)</code> &bull; Retensi maksimal 7 hari
                                 </small>
                             </div>
 
                             <div class="d-flex flex-wrap align-items-center gap-2">
                                 <span class="badge" style="background-color: #dc2626; color: #fff;">
-                                    {{ cpuHighLogs.length }} Kejadian
+                                    {{ cpuHighLogTotal }} Kejadian
                                 </span>
                                 <button
                                     class="btn btn-sm btn-outline-primary"
                                     :disabled="isLoadingCpuHighLogs"
-                                    @click="fetchCpuHighLogs">
+                                    @click="fetchCpuHighLogs(1)">
                                     <span v-if="isLoadingCpuHighLogs">Memuat...</span>
                                     <span v-else>Muat Ulang</span>
                                 </button>
                             </div>
                         </div>
 
-                        <div class="table-responsive" style="max-height: 420px; overflow-y: auto;">
-                            <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.84rem; min-width: 1150px;">
+                        <!-- Panel Statistik: Process yang Paling Sering Muncul Saat CPU Tinggi -->
+                        <div class="row g-3 mb-3">
+                            <!-- Top 1: Process yang Sering Menduduki Peringkat #1 -->
+                            <div class="col-12 col-lg-6">
+                                <div class="card h-100" style="border: 1px solid var(--border-color); border-radius: 8px; box-shadow: none;">
+                                    <div class="card-header bg-light py-2 px-3 border-bottom" style="border-color: var(--border-color) !important;">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <span class="fw-bold text-dark small">Top 1 &mdash; Sering di Peringkat #1</span>
+                                            <span class="badge" style="background-color: #dc2626; color: #fff; font-size: 0.72rem;">Peringkat #1</span>
+                                        </div>
+                                    </div>
+                                    <div class="table-responsive" style="max-height: 260px; overflow-y: auto;">
+                                        <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.84rem;">
+                                            <thead class="table-light sticky-top">
+                                                <tr>
+                                                    <th style="width: 45px;" class="text-center">#</th>
+                                                    <th>Nama Program</th>
+                                                    <th style="width: 95px;" class="text-end">Jadi #1</th>
+                                                    <th style="width: 95px;" class="text-end">Total</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="(stat, idx) in cpuHighStats.top1" :key="'t1-' + stat.processName">
+                                                    <td class="text-center text-muted fw-semibold">{{ idx + 1 }}</td>
+                                                    <td class="fw-semibold text-dark text-truncate" style="max-width: 220px;" :title="stat.processName">
+                                                        {{ stat.processName }}
+                                                    </td>
+                                                    <td class="text-end">
+                                                        <span class="badge" style="background-color: #dc2626; color: #fff;">
+                                                            {{ stat.rank1Count }}x
+                                                        </span>
+                                                    </td>
+                                                    <td class="text-end text-muted small">{{ stat.totalCount }}x</td>
+                                                </tr>
+                                                <tr v-if="!cpuHighStats.top1 || cpuHighStats.top1.length === 0">
+                                                    <td colspan="4" class="text-center text-muted py-3">Belum ada data statistik.</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Top 2: Process yang Sering Masuk Daftar #1 s/d #5 -->
+                            <div class="col-12 col-lg-6">
+                                <div class="card h-100" style="border: 1px solid var(--border-color); border-radius: 8px; box-shadow: none;">
+                                    <div class="card-header bg-light py-2 px-3 border-bottom" style="border-color: var(--border-color) !important;">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <span class="fw-bold text-dark small">Top 2 &mdash; Sering di Daftar #1 s/d #5</span>
+                                            <span class="badge" style="background-color: #d97706; color: #fff; font-size: 0.72rem;">#1 - #5</span>
+                                        </div>
+                                    </div>
+                                    <div class="table-responsive" style="max-height: 260px; overflow-y: auto;">
+                                        <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.84rem;">
+                                            <thead class="table-light sticky-top">
+                                                <tr>
+                                                    <th style="width: 45px;" class="text-center">#</th>
+                                                    <th>Nama Program</th>
+                                                    <th style="width: 95px;" class="text-end">Total</th>
+                                                    <th style="width: 95px;" class="text-end">Jadi #1</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="(stat, idx) in cpuHighStats.topAny" :key="'ta-' + stat.processName">
+                                                    <td class="text-center text-muted fw-semibold">{{ idx + 1 }}</td>
+                                                    <td class="fw-semibold text-dark text-truncate" style="max-width: 220px;" :title="stat.processName">
+                                                        {{ stat.processName }}
+                                                    </td>
+                                                    <td class="text-end">
+                                                        <span class="badge" style="background-color: #d97706; color: #fff;">
+                                                            {{ stat.totalCount }}x
+                                                        </span>
+                                                    </td>
+                                                    <td class="text-end text-muted small">{{ stat.rank1Count }}x</td>
+                                                </tr>
+                                                <tr v-if="!cpuHighStats.topAny || cpuHighStats.topAny.length === 0">
+                                                    <td colspan="4" class="text-center text-muted py-3">Belum ada data statistik.</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive" style="max-height: 420px; overflow-y: auto; overflow-x: auto;">
+                            <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.84rem; width: 100%; min-width: 1150px; table-layout: fixed;">
                                 <thead class="table-light sticky-top">
                                     <tr>
-                                        <th style="width: 130px;">Tanggal</th>
-                                        <th style="width: 90px;">Jam</th>
-                                        <th style="width: 80px;" class="text-end">CPU</th>
-                                        <th style="width: 190px;" class="text-center">#1</th>
-                                        <th style="width: 190px;" class="text-center">#2</th>
-                                        <th style="width: 190px;" class="text-center">#3</th>
-                                        <th style="width: 190px;" class="text-center">#4</th>
-                                        <th style="width: 190px;" class="text-center">#5</th>
+                                        <!-- Lebar "Waktu" dipatok pas dengan isi (dd/MM/yyyy HH:mm:ss) agar kolom CPU merapat ke kiri -->
+                                        <th style="width: 140px;">Waktu</th>
+                                        <!-- Lebar CPU dipertahankan 122px seperti sebelumnya; kolom #1-#5 tanpa width agar membagi sisa ruang secara merata -->
+                                        <th style="width: 122px;" class="text-end">CPU</th>
+                                        <th class="text-center">#1</th>
+                                        <th class="text-center">#2</th>
+                                        <th class="text-center">#3</th>
+                                        <th class="text-center">#4</th>
+                                        <th class="text-center">#5</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr v-for="log in cpuHighLogs" :key="log.id">
-                                        <td class="text-dark text-nowrap">{{ formatLogDate(log.timestamp) }}</td>
-                                        <td class="text-muted text-nowrap">{{ formatLogTime(log.timestamp) }}</td>
+                                        <td class="text-dark text-nowrap">{{ formatLogDateTime(log.timestamp) }}</td>
                                         <td class="text-end">
                                             <span class="badge" :class="getCpuBadgeClass(log.cpuTotal)">
                                                 {{ log.cpuTotal }}%
                                             </span>
                                         </td>
-                                        <td class="text-center text-truncate" style="max-width: 190px;" :title="log.process1">
+                                        <td class="text-center text-truncate" :title="log.process1">
                                             <span v-if="log.process1" class="fw-semibold text-dark">{{ log.process1 }}</span>
                                             <span v-else class="text-muted">-</span>
                                         </td>
-                                        <td class="text-center text-truncate" style="max-width: 190px;" :title="log.process2">
+                                        <td class="text-center text-truncate" :title="log.process2">
                                             <span v-if="log.process2" class="fw-semibold text-dark">{{ log.process2 }}</span>
                                             <span v-else class="text-muted">-</span>
                                         </td>
-                                        <td class="text-center text-truncate" style="max-width: 190px;" :title="log.process3">
+                                        <td class="text-center text-truncate" :title="log.process3">
                                             <span v-if="log.process3" class="fw-semibold text-dark">{{ log.process3 }}</span>
                                             <span v-else class="text-muted">-</span>
                                         </td>
-                                        <td class="text-center text-truncate" style="max-width: 190px;" :title="log.process4">
+                                        <td class="text-center text-truncate" :title="log.process4">
                                             <span v-if="log.process4" class="fw-semibold text-dark">{{ log.process4 }}</span>
                                             <span v-else class="text-muted">-</span>
                                         </td>
-                                        <td class="text-center text-truncate" style="max-width: 190px;" :title="log.process5">
+                                        <td class="text-center text-truncate" :title="log.process5">
                                             <span v-if="log.process5" class="fw-semibold text-dark">{{ log.process5 }}</span>
                                             <span v-else class="text-muted">-</span>
                                         </td>
                                     </tr>
                                     <tr v-if="cpuHighLogs.length === 0">
-                                        <td colspan="8" class="text-center text-muted py-4">
+                                        <td colspan="7" class="text-center text-muted py-4">
                                             Belum ada log CPU tinggi. Log akan otomatis tercatat saat CPU mencapai ambang batas.
                                         </td>
                                     </tr>
                                 </tbody>
                             </table>
+                        </div>
+
+                        <!-- Kontrol Pagination (10 baris per halaman) -->
+                        <div v-if="cpuHighLogTotalPages > 1" class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3 pt-3 border-top" style="border-color: var(--border-color) !important;">
+                            <small class="text-muted">
+                                Menampilkan halaman <span class="fw-semibold text-dark">{{ cpuHighLogPage }}</span>
+                                dari <span class="fw-semibold text-dark">{{ cpuHighLogTotalPages }}</span>
+                                &bull; Total <span class="fw-semibold text-dark">{{ cpuHighLogTotal }}</span> kejadian
+                            </small>
+
+                            <nav aria-label="Pagination log CPU tinggi">
+                                <ul class="pagination pagination-sm mb-0">
+                                    <li class="page-item" :class="{ disabled: cpuHighLogPage <= 1 || isLoadingCpuHighLogs }">
+                                        <button class="page-link" @click="goToCpuHighLogPage(cpuHighLogPage - 1)">Sebelumnya</button>
+                                    </li>
+
+                                    <li
+                                        v-for="pageNo in cpuHighLogPageNumbers"
+                                        :key="pageNo"
+                                        class="page-item"
+                                        :class="{ active: pageNo === cpuHighLogPage }">
+                                        <button class="page-link" @click="goToCpuHighLogPage(pageNo)">{{ pageNo }}</button>
+                                    </li>
+
+                                    <li class="page-item" :class="{ disabled: cpuHighLogPage >= cpuHighLogTotalPages || isLoadingCpuHighLogs }">
+                                        <button class="page-link" @click="goToCpuHighLogPage(cpuHighLogPage + 1)">Berikutnya</button>
+                                    </li>
+                                </ul>
+                            </nav>
                         </div>
                     </div>
                 </div>
@@ -718,6 +832,6 @@ gw <!DOCTYPE html>
     <script src="lib/chartjs/chart.umd.js"></script>
     <script src="lib/apexcharts/apexcharts.min.js"></script>
     <script src="lib/signalr/signalr.min.js"></script>
-    <script src="js/app.js?v=2.9"></script>
+    <script src="js/app.js?v=3.1"></script>
 </body>
 </html>
