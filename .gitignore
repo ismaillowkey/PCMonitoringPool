@@ -55,3 +55,11 @@ $RECYCLE.BIN/
 *.tmp
 *.temp
 *.cache
+
+# Temporary debug & test artifacts (scratch screenshots, logs, dan halaman uji)
+# File-file ini hanya untuk pengujian lokal dan tidak boleh ikut ter-commit / ter-publish
+_*.png
+_*.jpg
+_*.log
+_*.err
+src/wwwroot/_*.html
