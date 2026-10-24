@@ -68,6 +68,18 @@ namespace PCMonitoringCPURam.Services
                         );
                         CREATE INDEX IF NOT EXISTS idx_iis_timestamp ON IisMetricsHistory(Timestamp);
                         CREATE INDEX IF NOT EXISTS idx_iis_website ON IisMetricsHistory(WebsiteName);
+
+                        CREATE TABLE IF NOT EXISTS CpuHighProcessLog (
+                            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            Timestamp TEXT NOT NULL,
+                            CpuTotal REAL NOT NULL,
+                            Process1 TEXT NOT NULL DEFAULT '',
+                            Process2 TEXT NOT NULL DEFAULT '',
+                            Process3 TEXT NOT NULL DEFAULT '',
+                            Process4 TEXT NOT NULL DEFAULT '',
+                            Process5 TEXT NOT NULL DEFAULT ''
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_cpu_high_timestamp ON CpuHighProcessLog(Timestamp);
                     ";
 
                     using (var command = new SqliteCommand(createTableQuery, connection))
@@ -220,6 +232,147 @@ namespace PCMonitoringCPURam.Services
                     Console.WriteLine($"[IIS_METRICS_DB_ERROR] Gagal menyimpan log IIS: {ex.Message}");
                 }
             }
+        }
+
+        /// <summary>
+        /// Menyimpan log 5 process dengan CPU tertinggi pada saat CPU mencapai ambang batas tinggi
+        /// dan otomatis membersihkan data yang lebih tua dari 7 hari
+        /// </summary>
+        public void SaveCpuHighLog(double cpuTotal, List<ProcessMetricItem> topProcesses)
+        {
+            if (topProcesses == null || topProcesses.Count == 0)
+            {
+                return;
+            }
+
+            // Ambil maksimal 5 process teratas
+            var top5 = topProcesses.Take(5).ToList();
+
+            // Siapkan nama process, posisi yang kosong diisi string kosong
+            string[] processNames = new string[5];
+            for (int i = 0; i < processNames.Length; i++)
+            {
+                if (i < top5.Count)
+                {
+                    processNames[i] = top5[i].Name ?? string.Empty;
+                }
+                else
+                {
+                    processNames[i] = string.Empty;
+                }
+            }
+
+            lock (_dbLock)
+            {
+                try
+                {
+                    using (var connection = new SqliteConnection(_connectionString))
+                    {
+                        connection.Open();
+
+                        string insertQuery = @"
+                            INSERT INTO CpuHighProcessLog (
+                                Timestamp, CpuTotal,
+                                Process1, Process2, Process3, Process4, Process5
+                            ) VALUES (
+                                @Timestamp, @CpuTotal,
+                                @Process1, @Process2, @Process3, @Process4, @Process5
+                            );
+                        ";
+
+                        using (var command = new SqliteCommand(insertQuery, connection))
+                        {
+                            command.Parameters.AddWithValue("@Timestamp", DateTime.UtcNow.ToString("o"));
+                            command.Parameters.AddWithValue("@CpuTotal", cpuTotal);
+                            command.Parameters.AddWithValue("@Process1", processNames[0]);
+                            command.Parameters.AddWithValue("@Process2", processNames[1]);
+                            command.Parameters.AddWithValue("@Process3", processNames[2]);
+                            command.Parameters.AddWithValue("@Process4", processNames[3]);
+                            command.Parameters.AddWithValue("@Process5", processNames[4]);
+
+                            command.ExecuteNonQuery();
+                        }
+
+                        // Pembersihan otomatis log: retensi 7 hari ke belakang
+                        DateTime cutoffDate = DateTime.UtcNow.AddDays(-7);
+                        string deleteQuery = "DELETE FROM CpuHighProcessLog WHERE Timestamp < @CutoffDate;";
+
+                        using (var deleteCommand = new SqliteCommand(deleteQuery, connection))
+                        {
+                            deleteCommand.Parameters.AddWithValue("@CutoffDate", cutoffDate.ToString("o"));
+                            deleteCommand.ExecuteNonQuery();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[CPU_HIGH_LOG_DB_ERROR] Gagal menyimpan log CPU tinggi: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Mengambil daftar log proses CPU tinggi terbaru (terbaru di paling atas)
+        /// </summary>
+        public List<CpuHighLogRecord> GetCpuHighLogs(int limit = 100)
+        {
+            var records = new List<CpuHighLogRecord>();
+
+            if (limit <= 0)
+            {
+                limit = 100;
+            }
+
+            lock (_dbLock)
+            {
+                using (var connection = new SqliteConnection(_connectionString))
+                {
+                    connection.Open();
+
+                    string selectQuery = @"
+                        SELECT Id, Timestamp, CpuTotal, Process1, Process2, Process3, Process4, Process5
+                        FROM CpuHighProcessLog
+                        ORDER BY Id DESC
+                        LIMIT @Limit;
+                    ";
+
+                    using (var command = new SqliteCommand(selectQuery, connection))
+                    {
+                        command.Parameters.AddWithValue("@Limit", limit);
+
+                        using (var reader = command.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                var record = new CpuHighLogRecord();
+                                record.Id = reader.GetInt64(0);
+
+                                string timestampString = reader.GetString(1);
+                                DateTime parsedTimestamp;
+                                if (DateTime.TryParse(timestampString, out parsedTimestamp))
+                                {
+                                    record.Timestamp = parsedTimestamp;
+                                }
+                                else
+                                {
+                                    record.Timestamp = DateTime.UtcNow;
+                                }
+
+                                record.CpuTotal = reader.GetDouble(2);
+                                record.Process1 = reader.GetString(3);
+                                record.Process2 = reader.GetString(4);
+                                record.Process3 = reader.GetString(5);
+                                record.Process4 = reader.GetString(6);
+                                record.Process5 = reader.GetString(7);
+
+                                records.Add(record);
+                            }
+                        }
+                    }
+                }
+            }
+
+            return records;
         }
 
         /// <summary>

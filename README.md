@@ -109,7 +109,92 @@ sc delete PCMonitoring
 
 ---
 
-## 5. Deployment di Linux Menggunakan PM2
+## 6. Auto-Save Saat CPU Melonjak (Lonjakan 100%)
+
+Selain penyimpanan rutin **setiap 1 menit**, aplikasi secara otomatis menyimpan snapshot metrik **1x seketika**
+pada saat persentase CPU melewati ambang batas yang ditentukan (default **100%**), tanpa menunggu jadwal per menit.
+
+### Cara kerja:
+- Deteksi dilakukan setiap detik melalui *rising edge*, yaitu saat CPU **naik melewati** ambang batas
+  (dari di bawah ke atas). Setiap lonjakan CPU baru pasti memicu 1x penyimpanan.
+- Bila CPU turun kembali di bawah ambang lalu melonjak lagi, lonjakan baru tersebut **tetap tersimpan**
+  walau masih berada di dalam jendela 1 menit yang sama.
+- Diterapkan *cooldown* minimal **10 detik** antar auto-save agar CPU yang berkedip di sekitar ambang batas
+  tidak membanjiri database.
+- Auto-save tidak terjadi dobel dengan penyimpanan rutin: apabila jadwal per menit jatuh pada detik yang sama,
+  hanya satu penyimpanan yang dilakukan.
+
+### Konfigurasi ambang batas
+Nilai ambang dapat diubah melalui `appsettings.json`:
+
+```json
+"MetricThresholds": {
+  "CpuSpikePercent": 100
+}
+```
+
+| Nilai | Arti |
+|---|---|
+| `100` | Simpan saat CPU mencapai 100% (default) |
+| `95` | Simpan lebih awal saat CPU mencapai 95% |
+
+Nilai di luar rentang 1-100 akan diabaikan dan digunakan nilai default `100`.
+
+### Melihat riwayat auto-save
+Buka tab histori pada antarmuka web, atau query langsung:
+
+```sql
+SELECT Timestamp, CpuTotal, RamUsagePercent
+FROM MetricsHistory
+ORDER BY Id DESC
+LIMIT 20;
+```
+
+---
+
+## 7. Log Proses Saat CPU Tinggi
+
+Pada saat CPU mencapai ambang batas, aplikasi otomatis **mencatat 5 process dengan pemakaian CPU tertinggi**
+pada saat kejadian tersebut. Data disimpan di tabel SQLite terpisah bernama `CpuHighProcessLog`.
+
+### Struktur tabel
+
+| Kolom | Isi |
+|---|---|
+| `Id` | Nomor urut otomatis |
+| `Timestamp` | Tanggal & jam kejadian |
+| `CpuTotal` | Persentase CPU total saat kejadian |
+| `Process1` | Nama process dengan CPU tertinggi (peringkat 1) |
+| `Process2` | Nama process peringkat 2 |
+| `Process3` | Nama process peringkat 3 |
+| `Process4` | Nama process peringkat 4 |
+| `Process5` | Nama process peringkat 5 |
+
+Retensi data **7 hari** ke belakang, dibersihkan otomatis setiap kali ada insert baru.
+
+### Query langsung
+```sql
+SELECT Timestamp, CpuTotal, Process1, Process2, Process3, Process4, Process5
+FROM CpuHighProcessLog
+ORDER BY Id DESC
+LIMIT 20;
+```
+
+### Endpoint API
+```http
+GET /api/metrics/cpu-high-logs?limit=100
+```
+Parameter `limit` maksimal 500 baris (default 100).
+
+### Tampilan di antarmuka web
+Tabel **"Log Proses Saat CPU Tinggi"** berada di **paling bawah** halaman dashboard, dengan kolom
+`Tanggal`, `Jam`, `CPU`, lalu kolom `#1` s.d. `#5` berisi nama process. Data dimuat otomatis saat
+halaman dibuka dan diperbarui setiap 30 detik, serta dapat dimuat ulang manual lewat tombol
+**Muat Ulang**.
+
+---
+
+## 8. Deployment di Linux Menggunakan PM2
 
 Aplikasi ini mendukung cross-platform (Linux) untuk membaca metrik CPU/RAM melalui interface `/proc`.
 

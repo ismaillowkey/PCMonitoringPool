@@ -110,4 +110,24 @@ namespace PCMonitoringCPURam.Models
         public List<ProcessMetricItem> TopCpu { get; set; } = new List<ProcessMetricItem>();
         public List<ProcessMetricItem> TopRam { get; set; } = new List<ProcessMetricItem>();
     }
+
+    /// <summary>
+    /// Model data log proses saat CPU mencapai ambang batas tinggi (misal 100%).
+    /// Menyimpan tanggal & jam kejadian serta 5 nama process dengan CPU tertinggi
+    /// </summary>
+    public class CpuHighLogRecord
+    {
+        public long Id { get; set; }
+        public DateTime Timestamp { get; set; }
+
+        // Persentase CPU total pada saat kejadian
+        public double CpuTotal { get; set; }
+
+        // 5 nama process dengan pemakaian CPU tertinggi saat kejadian
+        public string Process1 { get; set; } = string.Empty;
+        public string Process2 { get; set; } = string.Empty;
+        public string Process3 { get; set; } = string.Empty;
+        public string Process4 { get; set; } = string.Empty;
+        public string Process5 { get; set; } = string.Empty;
+    }
 }

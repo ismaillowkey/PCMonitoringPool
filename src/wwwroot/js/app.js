@@ -130,6 +130,10 @@ createApp({
         });
         const isLoadingTopProcesses = ref(false);
 
+        // State log proses saat CPU mencapai ambang batas tinggi (5 process tertinggi)
+        const cpuHighLogs = ref([]);
+        const isLoadingCpuHighLogs = ref(false);
+
         // Objek instance chart dan koneksi SignalR
         let cpuApexChart = null;
         let ramLiveChart = null;
@@ -235,6 +239,61 @@ createApp({
                 return gb.toFixed(2) + ' GB';
             }
             return mb.toFixed(1) + ' MB';
+        }
+
+        // Format tanggal (dd/MM/yyyy) untuk tabel log CPU tinggi
+        function formatLogDate(timestamp) {
+            if (!timestamp) {
+                return '-';
+            }
+            const dt = new Date(timestamp);
+            if (isNaN(dt.getTime())) {
+                return '-';
+            }
+            const day = String(dt.getDate()).padStart(2, '0');
+            const month = String(dt.getMonth() + 1).padStart(2, '0');
+            const year = dt.getFullYear();
+            return day + '/' + month + '/' + year;
+        }
+
+        // Format jam (HH:mm:ss) untuk tabel log CPU tinggi
+        function formatLogTime(timestamp) {
+            if (!timestamp) {
+                return '-';
+            }
+            const dt = new Date(timestamp);
+            if (isNaN(dt.getTime())) {
+                return '-';
+            }
+            const hour = String(dt.getHours()).padStart(2, '0');
+            const minute = String(dt.getMinutes()).padStart(2, '0');
+            const second = String(dt.getSeconds()).padStart(2, '0');
+            return hour + ':' + minute + ':' + second;
+        }
+
+        // Fungsi fetch log proses saat CPU mencapai ambang batas tinggi
+        let isFetchingCpuHighLogs = false;
+        async function fetchCpuHighLogs() {
+            if (isFetchingCpuHighLogs) {
+                return;
+            }
+            isFetchingCpuHighLogs = true;
+            isLoadingCpuHighLogs.value = true;
+
+            try {
+                const response = await fetch('/api/metrics/cpu-high-logs?limit=100');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (Array.isArray(data)) {
+                        cpuHighLogs.value = data;
+                    }
+                }
+            } catch (err) {
+                console.error('Peringatan fetch log CPU tinggi:', err);
+            } finally {
+                isFetchingCpuHighLogs = false;
+                isLoadingCpuHighLogs.value = false;
+            }
         }
 
         // Fungsi fetch Top 20 Program CPU High Usage dan High RAM
@@ -1196,6 +1255,14 @@ createApp({
             setInterval(function() {
                 fetchTopProcesses();
             }, 10000);
+
+            // 10. Muat log proses CPU tinggi saat halaman pertama kali dibuka
+            fetchCpuHighLogs();
+
+            // 11. Refresh log proses CPU tinggi tiap 30 detik
+            setInterval(function() {
+                fetchCpuHighLogs();
+            }, 30000);
         });
 
         return {
@@ -1230,6 +1297,11 @@ createApp({
             topProcesses,
             isLoadingTopProcesses,
             fetchTopProcesses,
+            cpuHighLogs,
+            isLoadingCpuHighLogs,
+            fetchCpuHighLogs,
+            formatLogDate,
+            formatLogTime,
             getCpuBadgeClass,
             formatMb,
             historyCoreVisibility,
