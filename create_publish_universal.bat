@@ -82,6 +82,22 @@ if %ERRORLEVEL% NEQ 0 (
     goto :ERROR_EXIT
 )
 
+:: Salin file konfigurasi port (port.conf) ke folder hasil publish
+:: agar port HTTP bisa diubah tanpa perlu build ulang
+set "PORT_CONF_SRC="
+if exist "%SCRIPT_DIR%port.conf" set "PORT_CONF_SRC=%SCRIPT_DIR%port.conf"
+if not defined PORT_CONF_SRC if exist "%SCRIPT_DIR%..\port.conf" set "PORT_CONF_SRC=%SCRIPT_DIR%..\port.conf"
+if not defined PORT_CONF_SRC if exist "%OUTPUT_DIR%\port.conf" set "PORT_CONF_SRC=%OUTPUT_DIR%\port.conf"
+
+if defined PORT_CONF_SRC (
+    if /i not "%PORT_CONF_SRC%"=="%OUTPUT_DIR%\port.conf" copy /y "%PORT_CONF_SRC%" "%OUTPUT_DIR%\port.conf" >nul
+    echo.
+    echo Port config : "%OUTPUT_DIR%\port.conf"
+) else (
+    echo.
+    echo [WARN] port.conf tidak ditemukan. Aplikasi akan memakai port default 5055.
+)
+
 echo.
 echo ======================================================================
 echo                   PUBLISH COMPLETED SUCCESSFULLY!

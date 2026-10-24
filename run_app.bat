@@ -21,7 +21,7 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-echo [2/2] Starting application on http://localhost:5055 ...
+echo [2/2] Starting application (port dibaca dari port.conf, default 5055)...
 echo.
 echo Press Ctrl+C in this window to stop the server.
 echo.
