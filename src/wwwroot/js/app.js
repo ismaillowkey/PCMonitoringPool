@@ -318,6 +318,24 @@ createApp({
             return day + '/' + month + '/' + year + ' ' + hour + ':' + minute + ':' + second;
         }
 
+        // Format durasi baris log dalam satuan menit dengan 1 angka desimal,
+        // contoh: "12.5 min"
+        function formatLogDuration(minutes) {
+            let value = Number(minutes);
+            if (isNaN(value) || value < 0) {
+                value = 0;
+            }
+            return value.toFixed(1) + ' min';
+        }
+
+        // Tooltip penjelas arti kolom Durasi pada tabel log CPU tinggi
+        function getCpuLogDurationTitle(log) {
+            if (log.isLatestEvent) {
+                return 'Durasi berjalan: dari waktu kejadian ini sampai sekarang';
+            }
+            return 'Lama bertahan: dari waktu kejadian ini sampai kejadian berikutnya';
+        }
+
         // Fungsi fetch log proses saat CPU mencapai ambang batas tinggi (dengan pagination)
         let isFetchingCpuHighLogs = false;
         async function fetchCpuHighLogs(page) {
@@ -1466,6 +1484,8 @@ createApp({
             cpuHighStats,
             fetchCpuHighStats,
             formatLogDateTime,
+            formatLogDuration,
+            getCpuLogDurationTitle,
             getCpuBadgeClass,
             isCpuDropLog,
             getCpuLogBadgeClass,

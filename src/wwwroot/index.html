@@ -764,11 +764,13 @@
                         </div>
 
                         <div class="table-responsive" style="max-height: 420px; overflow-y: auto; overflow-x: auto;">
-                            <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.84rem; width: 100%; min-width: 1150px; table-layout: fixed;">
+                            <table class="table table-sm table-hover align-middle mb-0" style="font-size: 0.84rem; width: 100%; min-width: 1232px; table-layout: fixed;">
                                 <thead class="table-light sticky-top">
                                     <tr>
                                         <!-- Lebar "Waktu" dipatok pas dengan isi (dd/MM/yyyy HH:mm:ss) agar kolom CPU merapat ke kiri -->
                                         <th style="width: 140px;">Waktu</th>
+                                        <!-- Kolom Durasi: berapa lama baris ini bertahan sampai kejadian berikutnya -->
+                                        <th style="width: 82px;" class="text-end">Durasi</th>
                                         <!-- Lebar CPU dipertahankan 122px seperti sebelumnya; kolom #1-#5 tanpa width agar membagi sisa ruang secara merata -->
                                         <th style="width: 122px;" class="text-end">CPU</th>
                                         <th class="text-center">#1</th>
@@ -781,6 +783,12 @@
                                 <tbody>
                                     <tr v-for="log in cpuHighLogs" :key="log.id">
                                         <td class="text-dark text-nowrap">{{ formatLogDateTime(log.timestamp) }}</td>
+                                        <!-- Durasi: selisih waktu baris ini dengan kejadian berikutnya (baris terbaru: sampai sekarang) -->
+                                        <td class="text-end text-nowrap">
+                                            <span class="fw-semibold text-dark" :title="getCpuLogDurationTitle(log)">
+                                                {{ formatLogDuration(log.durationMinutes) }}
+                                            </span>
+                                        </td>
                                         <td class="text-end">
                                             <span class="badge cpu-trend-badge" :class="getCpuLogBadgeClass(log.cpuTotal)" :title="getCpuLogTrendTitle(log.cpuTotal)">
                                                 <span class="cpu-trend-arrow">{{ getCpuLogTrendIcon(log.cpuTotal) }}</span>
@@ -809,7 +817,7 @@
                                         </td>
                                     </tr>
                                     <tr v-if="cpuHighLogs.length === 0">
-                                        <td colspan="7" class="text-center text-muted py-4">
+                                        <td colspan="8" class="text-center text-muted py-4">
                                             Belum ada log CPU tinggi. Log akan otomatis tercatat saat CPU mencapai ambang batas.
                                         </td>
                                     </tr>

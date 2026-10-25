@@ -137,6 +137,15 @@ namespace PCMonitoringCPURam.Models
         public string Process3 { get; set; } = string.Empty;
         public string Process4 { get; set; } = string.Empty;
         public string Process5 { get; set; } = string.Empty;
+
+        // Lama baris ini bertahan (dalam menit), yaitu selisih waktu baris ini dengan
+        // waktu kejadian berikutnya. Untuk baris paling baru (belum ada kejadian
+        // berikutnya) nilainya dihitung sampai waktu sekarang saat data dibaca.
+        public double DurationMinutes { get; set; }
+
+        // Bernilai true bila baris ini adalah kejadian terbaru, sehingga durasinya
+        // masih berjalan (dihitung sampai waktu sekarang, bukan sampai kejadian berikutnya).
+        public bool IsLatestEvent { get; set; }
     }
 
     /// <summary>

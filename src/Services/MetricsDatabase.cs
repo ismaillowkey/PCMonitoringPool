@@ -596,8 +596,17 @@ namespace PCMonitoringCPURam.Services
 
                     int offset = (page - 1) * pageSize;
 
+                    // Kolom NextTimestamp diambil lewat subquery ke baris yang lebih baru (Id lebih besar).
+                    // Nilainya dipakai untuk menghitung berapa lama baris ini bertahan, yaitu sejak
+                    // waktu baris ini sampai kejadian berikutnya. Baris paling baru tidak punya
+                    // kejadian berikutnya, sehingga durasinya dihitung sampai waktu sekarang.
+                    // Subquery tetap membaca seluruh tabel (tanpa filter), supaya durasi tidak
+                    // berubah-ubah saat filter "high"/"low" sedang aktif.
                     string selectQuery = @"
-                        SELECT Id, Timestamp, CpuTotal, Process1, Process2, Process3, Process4, Process5
+                        SELECT Id, Timestamp, CpuTotal, Process1, Process2, Process3, Process4, Process5,
+                               (SELECT n.Timestamp FROM CpuHighProcessLog n
+                                WHERE n.Id > CpuHighProcessLog.Id
+                                ORDER BY n.Id ASC LIMIT 1) AS NextTimestamp
                         FROM CpuHighProcessLog
                         " + whereClause + @"
                         ORDER BY Id DESC
@@ -639,6 +648,38 @@ namespace PCMonitoringCPURam.Services
                                 record.Process3 = reader.GetString(5);
                                 record.Process4 = reader.GetString(6);
                                 record.Process5 = reader.GetString(7);
+
+                                // Kolom ke-9 adalah timestamp kejadian berikutnya (bisa NULL).
+                                // Bila NULL berarti baris ini yang paling baru, sehingga durasinya
+                                // dihitung sampai waktu sekarang dan ditandai sedang berjalan.
+                                DateTime nextTimestamp;
+                                record.IsLatestEvent = false;
+                                if (!reader.IsDBNull(8))
+                                {
+                                    string nextTimestampString = reader.GetString(8);
+                                    DateTime parsedNextTimestamp;
+                                    if (DateTime.TryParse(nextTimestampString, out parsedNextTimestamp))
+                                    {
+                                        nextTimestamp = parsedNextTimestamp;
+                                    }
+                                    else
+                                    {
+                                        nextTimestamp = DateTime.UtcNow;
+                                    }
+                                }
+                                else
+                                {
+                                    nextTimestamp = DateTime.UtcNow;
+                                    record.IsLatestEvent = true;
+                                }
+
+                                TimeSpan duration = nextTimestamp - record.Timestamp;
+                                if (duration.TotalMinutes < 0)
+                                {
+                                    duration = TimeSpan.Zero;
+                                }
+
+                                record.DurationMinutes = duration.TotalMinutes;
 
                                 items.Add(record);
                             }
